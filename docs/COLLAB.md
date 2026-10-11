@@ -13,9 +13,9 @@ This analysis framework always ends scientifically at NEEDS_EVIDENCE. Prose cons
 Artifacts: collab/runs/<id>/ with source hashes, input snapshot, manifest, state, per-attempt logs, reports and summary. Default resumes matching latest run; explicit -NewRun grants a fresh budget. -DryRun makes zero model calls; -Status is read-only. OS file lock prevents competing schedulers. Timeout/cancel kills owned process tree.
 
 ## Implementation plan
-- [ ] Retry/budget/resume and subprocess tests first.
-- [ ] Scheduler, adapters, input extraction and bounded prompts.
-- [ ] Launcher, native agent instructions and README.
+- [x] Retry/budget/resume and subprocess tests first.
+- [x] Scheduler, adapters, input extraction and bounded prompts.
+- [x] Launcher, native agent instructions and README.
 - [ ] Offline tests, dry run, then one real bounded run; inspect successes/failures.
 
 Review focus: Windows quoting, timeout children, persisted attempts after interruption, source/prompt/report integrity, error JSON with zero exit code. Work inline in the existing unborn Git repository; preserve original PDF and unrelated files.

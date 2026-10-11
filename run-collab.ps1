@@ -9,6 +9,18 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $python = Get-Command python -ErrorAction Stop
+# A plain invocation resumes the latest run with its original budget, never a fresh one.
+$latestPath = Join-Path $PSScriptRoot 'collab/latest.json'
+if (-not $NewRun -and (Test-Path -LiteralPath $latestPath)) {
+    $latest = Get-Content -Raw -LiteralPath $latestPath | ConvertFrom-Json
+    if ($latest.id -notmatch '^\d{8}-\d{6}-\d{6}$') { throw 'Invalid run ID' }
+    $manifestPath = Join-Path $PSScriptRoot "collab/runs/$($latest.id)/manifest.json"
+    $saved = (Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json).signature
+    if (-not $PSBoundParameters.ContainsKey('MaxRounds')) { $MaxRounds = $saved.rounds }
+    if (-not $PSBoundParameters.ContainsKey('MaxCalls')) { $MaxCalls = $saved.max_calls }
+    if (-not $PSBoundParameters.ContainsKey('TimeoutSeconds')) { $TimeoutSeconds = $saved.timeout }
+    if (-not $PSBoundParameters.ContainsKey('MaxSeconds')) { $MaxSeconds = $saved.max_seconds }
+}
 # Refresh user-scoped keys if this terminal predates their installation. Never print values.
 foreach ($name in @('GEMINI_API_KEY','GOOGLE_API_KEY')) {
     if (-not [Environment]::GetEnvironmentVariable($name,'Process')) {

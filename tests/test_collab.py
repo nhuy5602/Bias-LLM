@@ -98,6 +98,26 @@ class SchedulerTests(unittest.TestCase):
 
 
 class IntegrationTests(unittest.TestCase):
+
+    def test_codex_adapter_preserves_provider_and_does_not_quote_keys(self):
+        from unittest.mock import patch
+        from collab import invoke_cli
+        import os
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            (p / 'config.toml').write_text(
+                'model="existing-model"\n[mcp_servers.node_repl]\ncommand="unused"\n'
+                '[plugins."chrome@openai-bundled"]\nenabled=true\n', encoding='utf-8')
+            (p / 'answer.txt').write_text('a validated report', encoding='utf-8')
+            with patch.dict(os.environ, {'CODEX_HOME': d}), \
+                 patch('collab.run_process', return_value=('', '', 0)) as proc:
+                self.assertEqual(invoke_cli('codex','p',p,5), 'a validated report')
+                cmd = proc.call_args.args[0]
+                self.assertIn('mcp_servers.node_repl.enabled=false', cmd)
+                self.assertIn('plugins.chrome@openai-bundled.enabled=false', cmd)
+                self.assertNotIn('--ignore-user-config', cmd)
+                self.assertNotIn('--model', cmd)
+
     def test_concurrent_budget_and_other_members_survive(self):
         from concurrent.futures import ThreadPoolExecutor
         import time

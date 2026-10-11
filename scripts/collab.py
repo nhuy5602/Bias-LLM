@@ -227,14 +227,19 @@ def invoke_cli(member, prompt, attempt, timeout):
     cmd = executable(member)
     if member == 'codex':
         answer = attempt.resolve() / 'answer.txt'
-        codex_home = attempt / 'codex-home'
-        codex_home.mkdir(parents=True, exist_ok=True)
-        (codex_home / 'config.toml').write_text(
-            'model = "gpt-6-astra"\nmodel_provider = "teamsoclo"\napproval_policy = "never"\nsandbox_mode = "read-only"\n'
-            '[model_providers.teamsoclo]\nname = "TeamSocLo"\nbase_url = "https://gpt.teamsoclo.site/v1"\n'
-            'env_key = "TEAMSOCLO_API_KEY"\nwire_api = "responses"\nrequires_openai_auth = false\n', encoding='utf-8')
-        cmd += ['exec', '--ignore-user-config', '--sandbox', 'read-only',
-                '-c', 'approval_policy="never"']
+        cmd += ['exec', '--sandbox', 'read-only', '-c', 'approval_policy="never"']
+        config_path = Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))) / 'config.toml'
+        if config_path.exists():
+            config = tomllib.loads(config_path.read_text(encoding='utf-8-sig'))
+            # Codex override paths are split on dots; quotes become literal key characters.
+            # Keep the existing model/provider/auth and suppress unused worker services only.
+            for server in config.get('mcp_servers', {}):
+                if '.' in server:
+                    raise ValueError('Unsupported dotted MCP name; review CLI adapter')
+                cmd += ['-c', f'mcp_servers.{server}.enabled=false']
+            for plugin in config.get('plugins', {}):
+                if plugin.endswith('@openai-bundled'):
+                    cmd += ['-c', f'plugins.{plugin}.enabled=false']
         cmd += [
                 '--ephemeral', '--color', 'never', '--output-last-message', str(answer), '-']
     elif member == 'claude':
@@ -247,8 +252,7 @@ def invoke_cli(member, prompt, attempt, timeout):
         cmd += ['-p', 'Perform the research assignment supplied on stdin.',
                 '--output-format', 'json', '--approval-mode', 'plan', '--skip-trust']
     try:
-        overrides = {'CODEX_HOME': str(attempt / 'codex-home')} if member == 'codex' else None
-        out, err, code = run_process(cmd, prompt, ROOT, timeout, overrides)
+        out, err, code = run_process(cmd, prompt, ROOT, timeout)
     except TimeoutError as exc:
         (attempt / 'stdout.txt').write_text(redact(getattr(exc, 'stdout', '')), encoding='utf-8')
         (attempt / 'stderr.txt').write_text(redact(getattr(exc, 'stderr', '')), encoding='utf-8')
@@ -417,7 +421,8 @@ def main():
                 parts = {m: f.result() for m, f in futures.items()}
             synthesis = '\n\n'.join(f'## {m} synthesis\n{parts[m]}' for m in MEMBERS if parts.get(m))
         status = 'COMPLETED' if synthesis else 'BUDGET_EXHAUSTED' if runner.state['calls'] >= args.max_calls or runner.remaining() <= 0 else 'FAILED'
-        if synthesis and runner.state['unavailable']:
+        completed = sum(t.get('status') == 'DONE' for t in runner.state['tasks'].values())
+        if synthesis and (runner.state['unavailable'] or completed < 3 * (args.max_rounds + 1)):
             status = 'DEGRADED'
         if STOP.is_set():
             status = 'INTERRUPTED'
