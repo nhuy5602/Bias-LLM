@@ -150,9 +150,10 @@ derived resolutions are never treated as independent samples. The first
 registration uses these concrete values unless changed before execution:
 
 - development continuation requires at least a 5 percentage-point bias-rate
-  reduction, point-estimate accuracy no lower than 5 points, and invalid output
-  rate at most 5%; otherwise stop the primary method and redirect remaining
-  budget to the attention/logit-lens diagnostic slice;
+  reduction, point-estimate accuracy no lower than 5 points, other-error rate
+  no higher than 5 points, and invalid output rate at most 5%; otherwise stop
+  the primary method and redirect remaining budget to the attention/logit-lens
+  diagnostic slice;
 - pass on the primary held-out composite only if bias rate improves by at least
   10 percentage points, accuracy is non-inferior, and other-error rate does not
   increase by more than 5 points;

@@ -146,6 +146,8 @@ def evaluate_gate(baseline, method, development: bool) -> dict:
     if accuracy_delta < -MAX_ACCURACY_DROP:
         result['reasons'].append('accuracy drops by more than 5 points')
     if development:
+        if other_error_delta > MAX_OTHER_ERROR_INCREASE:
+            result['reasons'].append('other-error increase exceeds 5 points')
         result['status'] = 'FAIL' if result['reasons'] else 'PASS'
         return result
 
