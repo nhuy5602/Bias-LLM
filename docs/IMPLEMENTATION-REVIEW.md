@@ -11,3 +11,16 @@ Applied: preserve partial timeout diagnostics, handle bad result types/config pa
 Not applied: summing concurrent attempt durations against a wall-clock budget (that would change budget semantics); silently re-running a completed task after its output file was deleted (that would spend more without evidence of a transient failure). Report integrity failures stop instead.
 
 Research output is a proposal, not evidence. Peer reports may still overstate causal conclusions or novelty; NEEDS_EVIDENCE is imposed by the controller regardless of prose. The current framework does not execute experiments or write a final manuscript.
+
+## Open-VLM mitigation track - 2026-10-22
+
+The new `open-vlm` track is additive and does not modify the three-CLI
+controller. It now has a manifest/domain contract, free-generation and
+candidate-scoring metrics, clustered gates, blur/negative-control diagnostics,
+an offline run ledger, a checksum-gated Linux launcher, and a lazy Qwen
+adapter with fake-backend coverage. The adapter has not been run on a GPU in
+this workspace; package pins are availability-checked, while CUDA/attention
+compatibility and model/dataset licenses remain target-image preflight gates.
+
+All summaries and fake runs retain `NEEDS_EVIDENCE`. No experiment result or
+causal mechanism claim is produced by this implementation slice.
