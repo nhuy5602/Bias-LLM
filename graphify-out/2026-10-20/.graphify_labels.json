@@ -1,0 +1,9 @@
+{
+  "4": "semantic_label_pilot.py",
+  "5": "ADR-001: Keep Graphify and Gemini Handoffs Deterministic",
+  "6": "SchedulerTests",
+  "11": "run-collab.ps1",
+  "12": "run-semantic-label-pilot.ps1",
+  "13": "run-series.ps1",
+  "14": "check_project"
+}

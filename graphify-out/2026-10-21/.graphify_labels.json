@@ -1,0 +1,13 @@
+{
+  "0": "invoke",
+  "1": "logo_duo_pilot.py",
+  "5": "ADR-001: Keep Graphify and Gemini Handoffs Deterministic",
+  "6": "SchedulerTests",
+  "9": ".test_duo_fresh_run_uses_only_codex_and_gemini",
+  "11": "run-collab.ps1",
+  "12": "run-semantic-label-pilot.ps1",
+  "13": "run-series.ps1",
+  "16": "check_project",
+  "17": "IntegrationTests",
+  "18": "Cross-Cutting Principles"
+}

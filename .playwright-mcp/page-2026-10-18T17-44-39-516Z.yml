@@ -1,0 +1,92 @@
+- generic [ref=e5]:
+  - group "Theme" [ref=e6]:
+    - button "Light" [ref=e7] [cursor=pointer]
+    - button "Dark" [pressed] [ref=e8] [cursor=pointer]
+    - button "System" [ref=e9] [cursor=pointer]
+  - textbox "Search nodes..." [ref=e11]
+  - generic [ref=e12]:
+    - heading "Node Info" [level=3] [ref=e13]
+    - generic [ref=e14]: Click a node to inspect it
+  - generic [ref=e15]:
+    - heading "Communities" [level=3] [ref=e16]
+    - generic [ref=e18] [cursor=pointer]:
+      - checkbox "Select All" [checked] [ref=e19]
+      - text: Select All
+    - generic [ref=e20]:
+      - generic [ref=e21] [cursor=pointer]:
+        - checkbox [checked] [ref=e22]
+        - generic [ref=e24]: collab.py
+        - generic [ref=e25]: "68"
+      - generic [ref=e26] [cursor=pointer]:
+        - checkbox [checked] [ref=e27]
+        - generic [ref=e29]: logo_duo_pilot.py
+        - generic [ref=e30]: "35"
+      - generic [ref=e31] [cursor=pointer]:
+        - checkbox [checked] [ref=e32]
+        - generic [ref=e34]: Behavioral discrepancy is not causal mechanism
+        - generic [ref=e35]: "29"
+      - generic [ref=e36] [cursor=pointer]:
+        - checkbox [checked] [ref=e37]
+        - generic [ref=e39]: check_research_constraints.py
+        - generic [ref=e40]: "27"
+      - generic [ref=e41] [cursor=pointer]:
+        - checkbox [checked] [ref=e42]
+        - generic [ref=e44]: semantic_label_pilot.py
+        - generic [ref=e45]: "73"
+      - generic [ref=e46] [cursor=pointer]:
+        - checkbox [checked] [ref=e47]
+        - generic [ref=e49]: "ADR-001: Keep Graphify and Gemini Handoffs Deterministic"
+        - generic [ref=e50]: "12"
+      - generic [ref=e51] [cursor=pointer]:
+        - checkbox [checked] [ref=e52]
+        - generic [ref=e54]: SchedulerTests
+        - generic [ref=e55]: "33"
+      - generic [ref=e56] [cursor=pointer]:
+        - checkbox [checked] [ref=e57]
+        - generic [ref=e59]: .test_duo_fresh_run_uses_only_codex_and_gemini
+        - generic [ref=e60]: "15"
+      - generic [ref=e61] [cursor=pointer]:
+        - checkbox [checked] [ref=e62]
+        - generic [ref=e64]: Collab Orchestrator — Design Spec
+        - generic [ref=e65]: "11"
+      - generic [ref=e66] [cursor=pointer]:
+        - checkbox [checked] [ref=e67]
+        - generic [ref=e69]: Nhóm nghiên cứu Bias VLM — Codex, Claude Code, Gemini
+        - generic [ref=e70]: "6"
+      - generic [ref=e71] [cursor=pointer]:
+        - checkbox [checked] [ref=e72]
+        - generic [ref=e74]: hashlib
+        - generic [ref=e75]: "10"
+      - generic [ref=e76] [cursor=pointer]:
+        - checkbox [checked] [ref=e77]
+        - generic [ref=e79]: run-collab.ps1
+        - generic [ref=e80]: "1"
+      - generic [ref=e81] [cursor=pointer]:
+        - checkbox [checked] [ref=e82]
+        - generic [ref=e84]: run-semantic-label-pilot.ps1
+        - generic [ref=e85]: "1"
+      - generic [ref=e86] [cursor=pointer]:
+        - checkbox [checked] [ref=e87]
+        - generic [ref=e89]: run-series.ps1
+        - generic [ref=e90]: "1"
+      - generic [ref=e91] [cursor=pointer]:
+        - checkbox [checked] [ref=e92]
+        - generic [ref=e94]: Local research team — approved execution scope
+        - generic [ref=e95]: "3"
+      - generic [ref=e96] [cursor=pointer]:
+        - checkbox [checked] [ref=e97]
+        - generic [ref=e99]: AGENTS.md
+        - generic [ref=e100]: "2"
+      - generic [ref=e101] [cursor=pointer]:
+        - checkbox [checked] [ref=e102]
+        - generic [ref=e104]: CLAUDE.md
+        - generic [ref=e105]: "2"
+      - generic [ref=e106] [cursor=pointer]:
+        - checkbox [checked] [ref=e107]
+        - generic [ref=e109]: IMPLEMENTATION-REVIEW.md
+        - generic [ref=e110]: "2"
+      - generic [ref=e111] [cursor=pointer]:
+        - checkbox [checked] [ref=e112]
+        - generic [ref=e114]: GEMINI.md
+        - generic [ref=e115]: "2"
+  - generic [ref=e116]: 333 nodes · 717 edges · 19 communities

@@ -1,0 +1,1706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bias LLM — Complete Call Flow &amp; Architecture Documentation</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+:root {
+  --bg: #0f172a; --surface: #1e293b; --border: #334155;
+  --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+  --warn: #fbbf24; --err: #f87171; --ok: #34d399;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+.container { max-width: 1200px; margin: 0 auto; padding: 40px 24px; }
+h1 { font-size: 2.4rem; margin-bottom: 8px; background: linear-gradient(135deg, var(--accent), #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+h2 { font-size: 1.7rem; margin: 48px 0 16px; padding-bottom: 8px; border-bottom: 2px solid var(--accent); }
+h3 { font-size: 1.25rem; margin: 32px 0 12px; color: var(--accent); }
+h4 { font-size: 1.05rem; margin: 20px 0 8px; color: var(--warn); }
+p { margin: 8px 0; color: var(--muted); }
+.subtitle { color: var(--muted); font-size: 1.1rem; margin-bottom: 32px; }
+.mermaid { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin: 20px 0; overflow-x: auto; position: relative; }
+.mermaid.is-enhanced { padding: 0; overflow: hidden; min-height: 260px; }
+.mermaid-viewport { padding: 54px 24px 24px; overflow: hidden; cursor: grab; touch-action: none; min-height: 260px; }
+.mermaid-viewport.is-dragging { cursor: grabbing; }
+.mermaid-viewport svg { max-width: none !important; height: auto; transform-origin: 0 0; transition: transform 120ms ease; }
+.mermaid-toolbar { position: absolute; top: 10px; right: 10px; z-index: 3; display: flex; align-items: center; gap: 6px; padding: 6px; background: rgba(15,23,42,0.92); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.28); }
+.mermaid-toolbar button, .mermaid-toolbar .zoom-level { height: 28px; min-width: 32px; border: 1px solid var(--border); border-radius: 6px; background: #1e293b; color: var(--text); font: 600 0.78rem system-ui, sans-serif; display: inline-flex; align-items: center; justify-content: center; }
+.mermaid-toolbar button { cursor: pointer; }
+.mermaid-toolbar button:hover { border-color: var(--accent); color: var(--accent); }
+.mermaid-toolbar .zoom-level { min-width: 52px; color: var(--muted); background: transparent; }
+.call-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.92rem; }
+.call-table th { background: #1a2744; color: var(--accent); text-align: left; padding: 10px 14px; border: 1px solid var(--border); }
+.call-table td { padding: 8px 14px; border: 1px solid var(--border); vertical-align: top; }
+.call-table tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; }
+.tag-async { background: #7c3aed33; color: #a78bfa; }
+.tag-class { background: #05966933; color: var(--ok); }
+.tag-func { background: #2563eb33; color: var(--accent); }
+.tag-cmd { background: #d9770633; color: var(--warn); }
+.tag-endpoint { background: #dc262633; color: var(--err); }
+.tag-hook { background: #db277733; color: #f472b6; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin: 16px 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin: 16px 0; }
+.arrow-chain { font-family: 'Fira Code', monospace; font-size: 0.85rem; color: var(--accent); padding: 10px; background: rgba(56,189,248,0.06); border-radius: 6px; }
+code { font-family: 'Fira Code', 'Cascadia Code', monospace; background: rgba(255,255,255,0.06); padding: 1px 6px; border-radius: 3px; font-size: 0.88em; }
+ul, ol { margin: 8px 0 8px 24px; color: var(--muted); }
+li { margin: 4px 0; }
+a { color: var(--accent); }
+hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+.nav { position: sticky; top: 0; background: var(--bg); z-index: 10; padding: 12px 0; border-bottom: 1px solid var(--border); display: flex; gap: 20px; flex-wrap: wrap; font-size: 0.9rem; }
+.nav a { text-decoration: none; }
+.nav a:hover { text-decoration: underline; }
+@media (max-width: 768px) { .container { padding: 16px; } h1 { font-size: 1.8rem; } }
+
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>Bias LLM — Complete Call Flow &amp; Architecture Documentation</h1>
+<p class="subtitle">Generated from graphify knowledge graph: 416 nodes, 961 edges, 19 communities. Commit: 77de20a</p>
+
+<div class="nav">
+    <a href="#overview">Architecture Overview</a>
+    <a href="#build-graph">Graph Build</a>
+    <a href="#cli-skills">CLI &amp; Skill Installers</a>
+    <a href="#ingest-cache-update">Ingestion &amp; Updates</a>
+    <a href="#tests-fixtures">Tests &amp; Fixtures</a>
+    <a href="#run-collab-ps1">run-collab.ps1</a>
+    <a href="#run-semantic-label-pilot-ps1">run-semantic-label-pilot.ps1</a>
+    <a href="#run-series-ps1">run-series.ps1</a>
+</div>
+
+<!-- ====== Architecture Overview ====== -->
+<h2 id="overview">1. Architecture Overview</h2>
+
+<div class="mermaid">
+
+%%{init: {"theme": "dark", "themeVariables": {"fontSize": "15.0px", "fontFamily": "Segoe UI, system-ui, sans-serif", "primaryColor": "#1e293b", "primaryTextColor": "#e2e8f0", "primaryBorderColor": "#38bdf8", "secondaryColor": "#0f172a", "tertiaryColor": "#334155", "lineColor": "#64748b", "textColor": "#e2e8f0"}, "flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 64, "padding": 14, "diagramPadding": 10, "useMaxWidth": true}}}%%
+flowchart LR
+    BUILD_GRAPH_321CBB04("Graph Build<br/><small>12 nodes</small>")
+    class BUILD_GRAPH_321CBB04 module;
+    CLI_SKILLS_9964CBB8("CLI &amp; Skill Installers<br/><small>42 nodes</small>")
+    class CLI_SKILLS_9964CBB8 module;
+    INGEST_CACHE_UPDATE_FF457338("Ingestion &amp; Updates<br/><small>80 nodes</small>")
+    class INGEST_CACHE_UPDATE_FF457338 module;
+    TESTS_FIXTURES_B84B1DCC("Tests &amp; Fixtures<br/><small>279 nodes</small>")
+    class TESTS_FIXTURES_B84B1DCC module;
+    RUN_COLLAB_PS1_3F2C4244("run-collab.ps1<br/><small>1 nodes</small>")
+    class RUN_COLLAB_PS1_3F2C4244 module;
+    RUN_SEMANTIC_LABEL_PILOT_PS1_C61DD87A("run-semantic-label-pilot.ps1<br/><small>1 nodes</small>")
+    class RUN_SEMANTIC_LABEL_PILOT_PS1_C61DD87A module;
+    RUN_SERIES_PS1_F9A84DF4("run-series.ps1<br/><small>1 nodes</small>")
+    class RUN_SERIES_PS1_F9A84DF4 module;
+    BUILD_GRAPH_321CBB04 -->|imports x5| TESTS_FIXTURES_B84B1DCC
+    CLI_SKILLS_9964CBB8 -->|explains x3| INGEST_CACHE_UPDATE_FF457338
+    CLI_SKILLS_9964CBB8 -->|references| TESTS_FIXTURES_B84B1DCC
+    INGEST_CACHE_UPDATE_FF457338 -->|references| CLI_SKILLS_9964CBB8
+    classDef entry fill:#422006,stroke:#fbbf24,color:#fde68a,stroke-width:1px;
+    classDef api fill:#450a0a,stroke:#f87171,color:#fee2e2,stroke-width:1px;
+    classDef async fill:#2e1065,stroke:#a78bfa,color:#ede9fe,stroke-width:1px;
+    classDef klass fill:#064e3b,stroke:#34d399,color:#d1fae5,stroke-width:1px;
+    classDef ui fill:#831843,stroke:#f472b6,color:#fce7f3,stroke-width:1px;
+    classDef module fill:#172554,stroke:#60a5fa,color:#dbeafe,stroke-width:1px;
+    classDef test fill:#3f3f46,stroke:#a1a1aa,color:#f4f4f5,stroke-width:1px;
+    classDef concept fill:#292524,stroke:#a8a29e,color:#fafaf9,stroke-dasharray:4 3;
+    classDef function fill:#0f172a,stroke:#38bdf8,color:#e0f2fe,stroke-width:1px;
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h4>Architecture Layers</h4>
+    <table style="width:100%;font-size:0.85rem;">
+      <tr><th>Layer</th><th>Nodes</th><th>Communities</th></tr>
+      <tr><td>Graph Build</td><td>12</td><td><code>16</code></td></tr><tr><td>CLI &amp; Skill Installers</td><td>42</td><td><code>8, 15</code></td></tr><tr><td>Ingestion &amp; Updates</td><td>80</td><td><code>10, 5</code></td></tr><tr><td>Tests &amp; Fixtures</td><td>279</td><td><code>4, 1, 14, 2, 0, 3, 6, 7, 9, 17, 18</code></td></tr><tr><td>run-collab.ps1</td><td>1</td><td><code>11</code></td></tr><tr><td>run-semantic-label-pilot.ps1</td><td>1</td><td><code>12</code></td></tr><tr><td>run-series.ps1</td><td>1</td><td><code>13</code></td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h4>Core Flow</h4>
+    <div class="arrow-chain">Graph Build -&gt; Tests &amp; Fixtures -&gt; CLI &amp; Skill Installers -&gt; Ingestion &amp; Updates -&gt; run-collab.ps1 -&gt; run-semantic-label-pilot.ps1 -&gt; run-series.ps1</div>
+  </div>
+</div>
+<div class="grid">
+  <div class="card">
+    <h4>Graph Report Highlights</h4>
+    <ul>
+      <li>416 nodes · 961 edges · 19 communities (13 shown, 6 thin omitted)</li>
+      <li>Extraction: 72% EXTRACTED · 28% INFERRED · 0% AMBIGUOUS · INFERRED: 266 edges (avg confidence: 0.82)</li>
+      <li>Token cost: 0 input · 0 output</li>
+      <li>1. `Artifact and provenance verification` - 39 edges</li>
+      <li>2. `SemanticLabelPilotTests` - 32 edges</li>
+      <li>3. `IntegrationTests` - 32 edges</li>
+    </ul>
+  </div>
+</div>
+<hr>
+<!-- ====== 2. Graph Build ====== -->
+<h2 id="build-graph">2. Graph Build</h2>
+<p>Graph Build groups implementation around graphify, augment, architecturepy, scripts, mostly in scripts/augment_graphify_architecture.py. This section covers 12 nodes and 19 internal edges; the diagram shows only representative relationships to stay readable.</p>
+
+<div class="mermaid">
+%%{init: {"theme": "dark", "themeVariables": {"fontSize": "15.0px", "fontFamily": "Segoe UI, system-ui, sans-serif", "primaryColor": "#1e293b", "primaryTextColor": "#e2e8f0", "primaryBorderColor": "#38bdf8", "secondaryColor": "#0f172a", "tertiaryColor": "#334155", "lineColor": "#64748b", "textColor": "#e2e8f0"}, "flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 64, "padding": 14, "diagramPadding": 10, "useMaxWidth": true}}}%%
+flowchart LR
+    %% Section: Graph Build (12 nodes, 19 edges)
+    scripts_augment_graphify_architecture_main_191a9029("main()<br/><small>scripts/augment_graphify_architecture.py</small>")
+    scripts_augment_graphify_architecture_alias_edge_3d94283a("alias_edges()<br/><small>scripts/augment_graphify_architecture.py</small>")
+    scripts_augment_graphify_architecture_artifact_e_072c30cc("artifact_edges()<br/><small>scripts/augment_graphify_architecture.py</small>")
+    scripts_augment_graphify_architecture_artifact_n_8b99f258("artifact_nodes()<br/><small>scripts/augment_graphify_architecture.py</small>")
+    scripts_augment_graphify_architecture_edge_694dac26("edge()<br/><small>scripts/augment_graphify_architecture.py</small>")
+    scripts_augment_graphify_architecture_node_762263ba("node()<br/><small>scripts/augment_graphify_architecture.py</small>")
+    scripts_augment_graphify_architecture_source_sta_b222f23f("source_state()<br/><small>scripts/augment_graphify_architecture.py</small>")
+    scripts_augment_graphify_architecture_update_rep_838dab71("update_report_provenance()<br/><small>scripts/augment_graphify_architecture.py</small>")
+    scripts_augment_graphify_architecture_811f870d("augment_graphify_architecture.py")
+    scripts_augment_graphify_architecture_source_sta_e226d31f("git()<br/><small>scripts/augment_graphify_architecture.py</small>")
+    scripts_augment_graphify_architecture_rationale_8f54aec1("Add the project workflow manifest to th...<br/><small>scripts/augment_graphify_architecture.py</small>")
+    scripts_augment_graphify_architecture_rationale_9ef1301c("Connect document headings to curated co...<br/><small>scripts/augment_graphify_architecture.py</small>")
+    scripts_augment_graphify_architecture_alias_edge_3d94283a -->|calls| scripts_augment_graphify_architecture_edge_694dac26
+    scripts_augment_graphify_architecture_artifact_e_072c30cc -->|calls| scripts_augment_graphify_architecture_edge_694dac26
+    scripts_augment_graphify_architecture_artifact_n_8b99f258 -->|calls| scripts_augment_graphify_architecture_node_762263ba
+    scripts_augment_graphify_architecture_main_191a9029 -->|calls| scripts_augment_graphify_architecture_artifact_n_8b99f258
+    scripts_augment_graphify_architecture_main_191a9029 -->|calls| scripts_augment_graphify_architecture_artifact_e_072c30cc
+    scripts_augment_graphify_architecture_main_191a9029 -->|calls| scripts_augment_graphify_architecture_alias_edge_3d94283a
+    scripts_augment_graphify_architecture_main_191a9029 -->|calls| scripts_augment_graphify_architecture_source_sta_b222f23f
+    scripts_augment_graphify_architecture_main_191a9029 -->|calls| scripts_augment_graphify_architecture_update_rep_838dab71
+    class scripts_augment_graphify_architecture_main_191a9029 function;
+    class scripts_augment_graphify_architecture_alias_edge_3d94283a function;
+    class scripts_augment_graphify_architecture_artifact_e_072c30cc function;
+    class scripts_augment_graphify_architecture_artifact_n_8b99f258 function;
+    class scripts_augment_graphify_architecture_edge_694dac26 function;
+    class scripts_augment_graphify_architecture_node_762263ba function;
+    class scripts_augment_graphify_architecture_source_sta_b222f23f function;
+    class scripts_augment_graphify_architecture_update_rep_838dab71 function;
+    class scripts_augment_graphify_architecture_811f870d module;
+    class scripts_augment_graphify_architecture_source_sta_e226d31f function;
+    class scripts_augment_graphify_architecture_rationale_8f54aec1 concept;
+    class scripts_augment_graphify_architecture_rationale_9ef1301c concept;
+    classDef entry fill:#422006,stroke:#fbbf24,color:#fde68a,stroke-width:1px;
+    classDef api fill:#450a0a,stroke:#f87171,color:#fee2e2,stroke-width:1px;
+    classDef async fill:#2e1065,stroke:#a78bfa,color:#ede9fe,stroke-width:1px;
+    classDef klass fill:#064e3b,stroke:#34d399,color:#d1fae5,stroke-width:1px;
+    classDef ui fill:#831843,stroke:#f472b6,color:#fce7f3,stroke-width:1px;
+    classDef module fill:#172554,stroke:#60a5fa,color:#dbeafe,stroke-width:1px;
+    classDef test fill:#3f3f46,stroke:#a1a1aa,color:#f4f4f5,stroke-width:1px;
+    classDef concept fill:#292524,stroke:#a8a29e,color:#fafaf9,stroke-dasharray:4 3;
+    classDef function fill:#0f172a,stroke:#38bdf8,color:#e0f2fe,stroke-width:1px;
+</div>
+
+<h3>Call Details</h3>
+<table class="call-table">
+<tr>
+  <th style="width:5%">#</th>
+  <th style="width:28%">Node</th>
+  <th style="width:10%">Type</th>
+  <th style="width:17%">Caller</th>
+  <th style="width:20%">Callees</th>
+  <th style="width:20%">Description</th>
+</tr>
+<tr>
+  <td>1</td>
+  <td><code>alias_edges()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>main()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><code>edge()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td>alias_edges() node in scripts/augment_graphify_architecture.py.</td>
+</tr>
+<tr>
+  <td>2</td>
+  <td><code>artifact_edges()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>main()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><code>edge()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td>artifact_edges() node in scripts/augment_graphify_architecture.py.</td>
+</tr>
+<tr>
+  <td>3</td>
+  <td><code>artifact_nodes()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>main()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><code>node()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td>artifact_nodes() node in scripts/augment_graphify_architecture.py.</td>
+</tr>
+<tr>
+  <td>4</td>
+  <td><code>edge()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>alias_edges()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small><br><code>artifact_edges()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td>No direct outbound edge</td>
+  <td>edge() node in scripts/augment_graphify_architecture.py.</td>
+</tr>
+<tr>
+  <td>5</td>
+  <td><code>main()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>alias_edges()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small><br><code>artifact_edges()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small><br><code>artifact_nodes()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small><br>+2 more</td>
+  <td>main() node in scripts/augment_graphify_architecture.py.</td>
+</tr>
+<tr>
+  <td>6</td>
+  <td><code>node()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>artifact_nodes()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td>No direct outbound edge</td>
+  <td>node() node in scripts/augment_graphify_architecture.py.</td>
+</tr>
+<tr>
+  <td>7</td>
+  <td><code>source_state()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>main()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><code>hashlib</code></td>
+  <td>source_state() node in scripts/augment_graphify_architecture.py.</td>
+</tr>
+<tr>
+  <td>8</td>
+  <td><code>git()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Turns a local path or remote repository into analysis context.</td>
+</tr>
+<tr>
+  <td>9</td>
+  <td><code>update_report_provenance()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>main()</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td>No direct outbound edge</td>
+  <td>update_report_provenance() node in scripts/augment_graphify_architecture.py.</td>
+</tr>
+<tr>
+  <td>10</td>
+  <td><code>augment_graphify_architecture.py</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><span class="tag tag-class">Module</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>hashlib</code><br><code>json</code><br><code>pathlib</code><br>+1 more</td>
+  <td>Module file in scripts/augment_graphify_architecture.py.</td>
+</tr>
+<tr>
+  <td>11</td>
+  <td><code>Add the project workflow manifest to the persistent Graphify graph. The normal…</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Design note for Add the project workflow manifest to the persistent Graphify graph. The normal….</td>
+</tr>
+<tr>
+  <td>12</td>
+  <td><code>Connect document headings to curated concepts using source-scoped rules.…</code><br><small style="color:var(--muted)">scripts/augment_graphify_architecture.py</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Design note for Connect document headings to curated concepts using source-scoped rules.….</td>
+</tr>
+</table>
+
+<div class="grid">
+  <div class="card">
+    <h4>Key Files</h4>
+    <table style="width:100%;font-size:0.85rem;">
+      <tr><th>File</th><th>Coverage</th></tr>
+      <tr><td><code>scripts/augment_graphify_architecture.py</code></td><td>12 nodes</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h4>Design Notes</h4>
+    <p>This section comes from graphify community clustering. Relationship summary: contains x9, calls x8, explains x2. The diagram prioritizes high-confidence calls or usage relationships; the table keeps the broader node inventory.</p>
+  </div>
+</div>
+<hr>
+
+<!-- ====== 3. CLI & Skill Installers ====== -->
+<h2 id="cli-skills">3. CLI &amp; Skill Installers</h2>
+<p>CLI &amp; Skill Installers groups implementation around collab, docs, 2026, orchestrator, mostly in superpowers/specs/2026-10-11-collab-orchestrator-design.md, collab/graphify/ARCHITECTURE.md, README.md. This section covers 42 nodes and 66 internal edges; the diagram shows only representative relationships to stay readable.</p>
+
+<div class="mermaid">
+%%{init: {"theme": "dark", "themeVariables": {"fontSize": "15.0px", "fontFamily": "Segoe UI, system-ui, sans-serif", "primaryColor": "#1e293b", "primaryTextColor": "#e2e8f0", "primaryBorderColor": "#38bdf8", "secondaryColor": "#0f172a", "tertiaryColor": "#334155", "lineColor": "#64748b", "textColor": "#e2e8f0"}, "flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 64, "padding": 14, "diagramPadding": 10, "useMaxWidth": true}}}%%
+flowchart LR
+    %% Section: CLI &amp; Skill Installers (42 nodes, 66 edges)
+    subgraph cli_skills_collab_graphify_ARCHITECTURE_md_ce0e3772["collab/graphify/ARCHITECTURE.md"]
+        collab_graphify_architecture_gemini_prompt_010f79d9("Gemini prompt handoff<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_bounded_question_a6056bc5("Bounded research question<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_codex_execution_77e709ca("Codex execution<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_visual_prior_bias_4288d31f("Visual-prior bias research<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_provenance_labels_fc31af57("Claim provenance labels<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_epistemic_disciplin_1361cd58("Epistemic discipline and auditability<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_matched_subsets_com_f4c5f820("Matched subsets and compute budgets<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_original_cf_separat_dca34911("Original/counterfactual family separation<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_repeat_accounting_4489ff94("Repeat versus independent sample accoun...<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+    end
+    subgraph cli_skills_AGENTS_md_c2f84881["AGENTS.md"]
+        agents_e7052aeb("AGENTS.md")
+        agents_research_project_visual_prior_bias_e37a1c59("Research project: visual-prior bias<br/><small>AGENTS.md</small>")
+    end
+    subgraph cli_skills_CLAUDE_md_27387765["CLAUDE.md"]
+        claude_f1dda22f("CLAUDE.md")
+        claude_project_research_instructions_c07c0eab("Project research instructions<br/><small>CLAUDE.md</small>")
+    end
+    subgraph cli_skills_CONSTRAINTS_md_c4275bbd["CONSTRAINTS.md"]
+        constraints_research_constraints_2ede7859("Research Constraints<br/><small>CONSTRAINTS.md</small>")
+        constraints_b93db90c("CONSTRAINTS.md")
+    end
+    readme_nh_m_nghi_n_c_u_bias_vlm_codex_claude_cod_359505ce("Nhóm nghiên cứu Bias VLM — Codex, Claud...<br/><small>README.md</small>")
+    docs_collab_local_research_team_approved_executi_18d1bbf5("Local research team — approved executio...<br/><small>docs/COLLAB.md</small>")
+    docs_superpowers_specs_2026_10_11_collab_orchest_dbd59d52("Collab Orchestrator — Design Spec<br/><small>superpowers/specs/2026-10-11-collab-orchestrator-design.md</small>")
+    agents_e7052aeb -->|contains| agents_research_project_visual_prior_bias_e37a1c59
+    claude_f1dda22f -->|contains| claude_project_research_instructions_c07c0eab
+    constraints_b93db90c -->|contains| constraints_research_constraints_2ede7859
+    collab_graphify_architecture_bounded_question_a6056bc5 -->|references| collab_graphify_architecture_gemini_prompt_010f79d9
+    collab_graphify_architecture_gemini_prompt_010f79d9 -->|references| collab_graphify_architecture_codex_execution_77e709ca
+    collab_graphify_architecture_visual_prior_bias_4288d31f -->|explains| collab_graphify_architecture_bounded_question_a6056bc5
+    %% Omitted for readability: 24 nodes, 0 edges
+    class collab_graphify_architecture_gemini_prompt_010f79d9 klass;
+    class collab_graphify_architecture_bounded_question_a6056bc5 klass;
+    class collab_graphify_architecture_codex_execution_77e709ca klass;
+    class collab_graphify_architecture_visual_prior_bias_4288d31f klass;
+    class collab_graphify_architecture_provenance_labels_fc31af57 klass;
+    class collab_graphify_architecture_epistemic_disciplin_1361cd58 klass;
+    class collab_graphify_architecture_matched_subsets_com_f4c5f820 klass;
+    class collab_graphify_architecture_original_cf_separat_dca34911 klass;
+    class collab_graphify_architecture_repeat_accounting_4489ff94 klass;
+    class agents_e7052aeb concept;
+    class agents_research_project_visual_prior_bias_e37a1c59 concept;
+    class claude_f1dda22f concept;
+    class claude_project_research_instructions_c07c0eab concept;
+    class constraints_research_constraints_2ede7859 concept;
+    class constraints_b93db90c concept;
+    class readme_nh_m_nghi_n_c_u_bias_vlm_codex_claude_cod_359505ce concept;
+    class docs_collab_local_research_team_approved_executi_18d1bbf5 concept;
+    class docs_superpowers_specs_2026_10_11_collab_orchest_dbd59d52 concept;
+    classDef entry fill:#422006,stroke:#fbbf24,color:#fde68a,stroke-width:1px;
+    classDef api fill:#450a0a,stroke:#f87171,color:#fee2e2,stroke-width:1px;
+    classDef async fill:#2e1065,stroke:#a78bfa,color:#ede9fe,stroke-width:1px;
+    classDef klass fill:#064e3b,stroke:#34d399,color:#d1fae5,stroke-width:1px;
+    classDef ui fill:#831843,stroke:#f472b6,color:#fce7f3,stroke-width:1px;
+    classDef module fill:#172554,stroke:#60a5fa,color:#dbeafe,stroke-width:1px;
+    classDef test fill:#3f3f46,stroke:#a1a1aa,color:#f4f4f5,stroke-width:1px;
+    classDef concept fill:#292524,stroke:#a8a29e,color:#fafaf9,stroke-dasharray:4 3;
+    classDef function fill:#0f172a,stroke:#38bdf8,color:#e0f2fe,stroke-width:1px;
+</div>
+
+<h3>Call Details</h3>
+<table class="call-table">
+<tr>
+  <th style="width:5%">#</th>
+  <th style="width:28%">Node</th>
+  <th style="width:10%">Type</th>
+  <th style="width:17%">Caller</th>
+  <th style="width:20%">Callees</th>
+  <th style="width:20%">Description</th>
+</tr>
+<tr>
+  <td>1</td>
+  <td><code>COLLAB.md</code><br><small style="color:var(--muted)">docs/COLLAB.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing COLLAB.md.</td>
+</tr>
+<tr>
+  <td>2</td>
+  <td><code>Implementation plan</code><br><small style="color:var(--muted)">docs/COLLAB.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Implementation plan.</td>
+</tr>
+<tr>
+  <td>3</td>
+  <td><code>Local research team — approved execution scope</code><br><small style="color:var(--muted)">docs/COLLAB.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Local research team — approved execution scope.</td>
+</tr>
+<tr>
+  <td>4</td>
+  <td><code>2026-10-11-collab-orchestrator-design.md</code><br><small style="color:var(--muted)">superpowers/specs/2026-10-11-collab-orchestrator-design.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing 2026-10-11-collab-orchestrator-design.md.</td>
+</tr>
+<tr>
+  <td>5</td>
+  <td><code>1. Intent</code><br><small style="color:var(--muted)">superpowers/specs/2026-10-11-collab-orchestrator-design.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing 1. Intent.</td>
+</tr>
+<tr>
+  <td>6</td>
+  <td><code>2. Non-goals for this phase</code><br><small style="color:var(--muted)">superpowers/specs/2026-10-11-collab-orchestrator-design.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing 2. Non-goals for this phase.</td>
+</tr>
+<tr>
+  <td>7</td>
+  <td><code>3. Architecture</code><br><small style="color:var(--muted)">superpowers/specs/2026-10-11-collab-orchestrator-design.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing 3. Architecture.</td>
+</tr>
+<tr>
+  <td>8</td>
+  <td><code>4. Artifacts under `collab/`</code><br><small style="color:var(--muted)">superpowers/specs/2026-10-11-collab-orchestrator-design.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing 4. Artifacts under `collab/`.</td>
+</tr>
+<tr>
+  <td>9</td>
+  <td><code>5. Flow</code><br><small style="color:var(--muted)">superpowers/specs/2026-10-11-collab-orchestrator-design.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing 5. Flow.</td>
+</tr>
+<tr>
+  <td>10</td>
+  <td><code>6. Flags and safety</code><br><small style="color:var(--muted)">superpowers/specs/2026-10-11-collab-orchestrator-design.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing 6. Flags and safety.</td>
+</tr>
+<tr>
+  <td>11</td>
+  <td><code>7. Verification</code><br><small style="color:var(--muted)">superpowers/specs/2026-10-11-collab-orchestrator-design.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing 7. Verification.</td>
+</tr>
+<tr>
+  <td>12</td>
+  <td><code>8. Open item</code><br><small style="color:var(--muted)">superpowers/specs/2026-10-11-collab-orchestrator-design.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing 8. Open item.</td>
+</tr>
+<tr>
+  <td>13</td>
+  <td><code>9. Self-review 2026-10-11</code><br><small style="color:var(--muted)">superpowers/specs/2026-10-11-collab-orchestrator-design.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing 9. Self-review 2026-10-11.</td>
+</tr>
+<tr>
+  <td>14</td>
+  <td><code>Collab Orchestrator — Design Spec</code><br><small style="color:var(--muted)">superpowers/specs/2026-10-11-collab-orchestrator-design.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Collab Orchestrator — Design Spec.</td>
+</tr>
+<tr>
+  <td>15</td>
+  <td><code>README.md</code><br><small style="color:var(--muted)">README.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing README.md.</td>
+</tr>
+<tr>
+  <td>16</td>
+  <td><code>Giới hạn mặc định</code><br><small style="color:var(--muted)">README.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Giới hạn mặc định.</td>
+</tr>
+<tr>
+  <td>17</td>
+  <td><code>Kết quả</code><br><small style="color:var(--muted)">README.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Kết quả.</td>
+</tr>
+<tr>
+  <td>18</td>
+  <td><code>Lệnh khác</code><br><small style="color:var(--muted)">README.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Lệnh khác.</td>
+</tr>
+<tr>
+  <td>19</td>
+  <td><code>Nhóm nghiên cứu Bias VLM — Codex, Claude Code, Gemini</code><br><small style="color:var(--muted)">README.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Nhóm nghiên cứu Bias VLM — Codex, Claude Code, Gemini.</td>
+</tr>
+<tr>
+  <td>20</td>
+  <td><code>Skills và plugins</code><br><small style="color:var(--muted)">README.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Skills và plugins.</td>
+</tr>
+<tr>
+  <td>21</td>
+  <td><code>Bounded research question</code><br><small style="color:var(--muted)">collab/graphify/ARCHITECTURE.md</small></td>
+  <td><span class="tag tag-class">Class</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Bounded research question node in collab/graphify/ARCHITECTURE.md.</td>
+</tr>
+<tr>
+  <td>22</td>
+  <td><code>Codex execution</code><br><small style="color:var(--muted)">collab/graphify/ARCHITECTURE.md</small></td>
+  <td><span class="tag tag-class">Class</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Codex execution node in collab/graphify/ARCHITECTURE.md.</td>
+</tr>
+<tr>
+  <td>23</td>
+  <td><code>Gemini prompt handoff</code><br><small style="color:var(--muted)">collab/graphify/ARCHITECTURE.md</small></td>
+  <td><span class="tag tag-class">Class</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Builds structured prompts for model calls.</td>
+</tr>
+<tr>
+  <td>24</td>
+  <td><code>Visual-prior bias research</code><br><small style="color:var(--muted)">collab/graphify/ARCHITECTURE.md</small></td>
+  <td><span class="tag tag-class">Class</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Visual-prior bias research node in collab/graphify/ARCHITECTURE.md.</td>
+</tr>
+<tr>
+  <td>25</td>
+  <td><code>Graphify Gemini audit prompt</code><br><small style="color:var(--muted)">collab/graphify/GEMINI-PROMPT.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Graphify Gemini audit prompt.</td>
+</tr>
+<tr>
+  <td>26</td>
+  <td><code>AGENTS.md</code><br><small style="color:var(--muted)">AGENTS.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing AGENTS.md.</td>
+</tr>
+<tr>
+  <td>27</td>
+  <td><code>Research project: visual-prior bias</code><br><small style="color:var(--muted)">AGENTS.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Research project: visual-prior bias.</td>
+</tr>
+<tr>
+  <td>28</td>
+  <td><code>CLAUDE.md</code><br><small style="color:var(--muted)">CLAUDE.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing CLAUDE.md.</td>
+</tr>
+<tr>
+  <td>29</td>
+  <td><code>Project research instructions</code><br><small style="color:var(--muted)">CLAUDE.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Project research instructions.</td>
+</tr>
+<tr>
+  <td>30</td>
+  <td><code>CONSTRAINTS.md</code><br><small style="color:var(--muted)">CONSTRAINTS.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing CONSTRAINTS.md.</td>
+</tr>
+</table>
+
+<div class="grid">
+  <div class="card">
+    <h4>Key Files</h4>
+    <table style="width:100%;font-size:0.85rem;">
+      <tr><th>File</th><th>Coverage</th></tr>
+      <tr><td><code>superpowers/specs/2026-10-11-collab-orchestrator-design.md</code></td><td>11 nodes</td></tr>
+<tr><td><code>collab/graphify/ARCHITECTURE.md</code></td><td>9 nodes</td></tr>
+<tr><td><code>CONSTRAINTS.md</code></td><td>6 nodes</td></tr>
+<tr><td><code>README.md</code></td><td>6 nodes</td></tr>
+<tr><td><code>docs/COLLAB.md</code></td><td>3 nodes</td></tr>
+<tr><td><code>AGENTS.md</code></td><td>2 nodes</td></tr>
+<tr><td><code>CLAUDE.md</code></td><td>2 nodes</td></tr>
+<tr><td><code>GEMINI.md</code></td><td>2 nodes</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h4>Design Notes</h4>
+    <p>This section comes from graphify community clustering. Relationship summary: contains x25, references x3, explains x1. The diagram prioritizes high-confidence calls or usage relationships; the table keeps the broader node inventory.</p>
+  </div>
+</div>
+<hr>
+
+<!-- ====== 4. Ingestion & Updates ====== -->
+<h2 id="ingest-cache-update">4. Ingestion &amp; Updates</h2>
+<p>Ingestion &amp; Updates groups implementation around collab, graphify, tasks, gemini, mostly in collab/graphify/ARCHITECTURE.md, docs/decisions/ADR-001-graphify-workflow.md, tasks/plan.md. This section covers 80 nodes and 139 internal edges; the diagram shows only representative relationships to stay readable.</p>
+
+<div class="mermaid">
+%%{init: {"theme": "dark", "themeVariables": {"fontSize": "15.0px", "fontFamily": "Segoe UI, system-ui, sans-serif", "primaryColor": "#1e293b", "primaryTextColor": "#e2e8f0", "primaryBorderColor": "#38bdf8", "secondaryColor": "#0f172a", "tertiaryColor": "#334155", "lineColor": "#64748b", "textColor": "#e2e8f0"}, "flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 64, "padding": 14, "diagramPadding": 10, "useMaxWidth": true}}}%%
+flowchart LR
+    %% Section: Ingestion &amp; Updates (80 nodes, 139 edges)
+    subgraph ingest_cache_update_collab_graphify_ARCHITECTURE_30bd4a0c["collab/graphify/ARCHITECTURE.md"]
+        collab_graphify_architecture_manifest_4111edaf("Architecture manifest<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_provenance_verifica_11cb8165("Artifact and provenance verification<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_gemini_result_bbc8e485("Gemini counterfactual result<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_codex_result_e5a1fae4("Codex counterfactual result<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_baseline_condition_2055b05a("Baseline condition<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_codex_baseline_resu_305f2734("Codex baseline: 0/30 exact, 30/30 bias-...<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_gemini_baseline_res_f7f9e9a2("Gemini baseline: 30/30 exact, 0/30 bias...<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_evidence_first_cond_fba3796d("Evidence-first condition<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_codex_evidence_firs_70b44f87("Codex evidence-first: 0/30 exact, 30/30...<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_gemini_evidence_fir_5dfb34c9("Gemini evidence-first: 30/30 exact, 0/3...<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_gemini_review_ca87fa91("Gemini Antigravity review<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_intervention_0721c8b3("Evidence-first prompt intervention<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_synthesis_00e96342("Evidence-preserving synthesis<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_graphify_27cae0d0("Persistent Graphify map<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_maintenance_loop_e7d6b6c8("Graphify maintenance loop<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+        collab_graphify_architecture_behavioral_not_caus_2a4acc07("Behavioral discrepancy is not causal me...<br/><small>collab/graphify/ARCHITECTURE.md</small>")
+    end
+    docs_decisions_adr_001_graphify_workflow_adr_001_edf8ddd9("ADR-001: Keep Graphify and Gemini Hando...<br/><small>docs/decisions/ADR-001-graphify-workflow.md</small>")
+    tasks_plan_robustness_tasks_5516edff("Tasks<br/><small>tasks/plan-robustness.md</small>")
+    collab_graphify_architecture_baseline_condition_2055b05a -->|references| collab_graphify_architecture_codex_baseline_resu_305f2734
+    collab_graphify_architecture_baseline_condition_2055b05a -->|references| collab_graphify_architecture_gemini_baseline_res_f7f9e9a2
+    collab_graphify_architecture_evidence_first_cond_fba3796d -->|references| collab_graphify_architecture_codex_evidence_firs_70b44f87
+    collab_graphify_architecture_evidence_first_cond_fba3796d -->|references| collab_graphify_architecture_gemini_evidence_fir_5dfb34c9
+    collab_graphify_architecture_gemini_review_ca87fa91 -->|references| collab_graphify_architecture_provenance_verifica_11cb8165
+    collab_graphify_architecture_intervention_0721c8b3 -->|references| collab_graphify_architecture_codex_result_e5a1fae4
+    collab_graphify_architecture_intervention_0721c8b3 -->|references| collab_graphify_architecture_baseline_condition_2055b05a
+    collab_graphify_architecture_intervention_0721c8b3 -->|references| collab_graphify_architecture_evidence_first_cond_fba3796d
+    collab_graphify_architecture_intervention_0721c8b3 -->|references| collab_graphify_architecture_gemini_result_bbc8e485
+    collab_graphify_architecture_provenance_verifica_11cb8165 -->|references| collab_graphify_architecture_synthesis_00e96342
+    collab_graphify_architecture_graphify_27cae0d0 -->|references| collab_graphify_architecture_maintenance_loop_e7d6b6c8
+    collab_graphify_architecture_graphify_27cae0d0 -->|references| collab_graphify_architecture_provenance_verifica_11cb8165
+    collab_graphify_architecture_behavioral_not_caus_2a4acc07 -->|explains| collab_graphify_architecture_synthesis_00e96342
+    collab_graphify_architecture_codex_baseline_resu_305f2734 -->|explains| collab_graphify_architecture_behavioral_not_caus_2a4acc07
+    collab_graphify_architecture_codex_evidence_firs_70b44f87 -->|explains| collab_graphify_architecture_behavioral_not_caus_2a4acc07
+    collab_graphify_architecture_codex_result_e5a1fae4 -->|explains| collab_graphify_architecture_behavioral_not_caus_2a4acc07
+    collab_graphify_architecture_gemini_baseline_res_f7f9e9a2 -->|explains| collab_graphify_architecture_behavioral_not_caus_2a4acc07
+    collab_graphify_architecture_gemini_evidence_fir_5dfb34c9 -->|explains| collab_graphify_architecture_behavioral_not_caus_2a4acc07
+    collab_graphify_architecture_gemini_result_bbc8e485 -->|explains| collab_graphify_architecture_behavioral_not_caus_2a4acc07
+    %% Omitted for readability: 62 nodes, 0 edges
+    class collab_graphify_architecture_manifest_4111edaf concept;
+    class collab_graphify_architecture_provenance_verifica_11cb8165 klass;
+    class collab_graphify_architecture_gemini_result_bbc8e485 klass;
+    class collab_graphify_architecture_codex_result_e5a1fae4 klass;
+    class collab_graphify_architecture_baseline_condition_2055b05a klass;
+    class collab_graphify_architecture_codex_baseline_resu_305f2734 klass;
+    class collab_graphify_architecture_gemini_baseline_res_f7f9e9a2 klass;
+    class collab_graphify_architecture_evidence_first_cond_fba3796d klass;
+    class collab_graphify_architecture_codex_evidence_firs_70b44f87 klass;
+    class collab_graphify_architecture_gemini_evidence_fir_5dfb34c9 klass;
+    class collab_graphify_architecture_gemini_review_ca87fa91 klass;
+    class collab_graphify_architecture_intervention_0721c8b3 klass;
+    class collab_graphify_architecture_synthesis_00e96342 klass;
+    class collab_graphify_architecture_graphify_27cae0d0 klass;
+    class collab_graphify_architecture_maintenance_loop_e7d6b6c8 klass;
+    class collab_graphify_architecture_behavioral_not_caus_2a4acc07 klass;
+    class docs_decisions_adr_001_graphify_workflow_adr_001_edf8ddd9 concept;
+    class tasks_plan_robustness_tasks_5516edff concept;
+    classDef entry fill:#422006,stroke:#fbbf24,color:#fde68a,stroke-width:1px;
+    classDef api fill:#450a0a,stroke:#f87171,color:#fee2e2,stroke-width:1px;
+    classDef async fill:#2e1065,stroke:#a78bfa,color:#ede9fe,stroke-width:1px;
+    classDef klass fill:#064e3b,stroke:#34d399,color:#d1fae5,stroke-width:1px;
+    classDef ui fill:#831843,stroke:#f472b6,color:#fce7f3,stroke-width:1px;
+    classDef module fill:#172554,stroke:#60a5fa,color:#dbeafe,stroke-width:1px;
+    classDef test fill:#3f3f46,stroke:#a1a1aa,color:#f4f4f5,stroke-width:1px;
+    classDef concept fill:#292524,stroke:#a8a29e,color:#fafaf9,stroke-dasharray:4 3;
+    classDef function fill:#0f172a,stroke:#38bdf8,color:#e0f2fe,stroke-width:1px;
+</div>
+
+<h3>Call Details</h3>
+<table class="call-table">
+<tr>
+  <th style="width:5%">#</th>
+  <th style="width:28%">Node</th>
+  <th style="width:10%">Type</th>
+  <th style="width:17%">Caller</th>
+  <th style="width:20%">Callees</th>
+  <th style="width:20%">Description</th>
+</tr>
+<tr>
+  <td>1</td>
+  <td><code>IMPLEMENTATION-REVIEW.md</code><br><small style="color:var(--muted)">docs/IMPLEMENTATION-REVIEW.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing IMPLEMENTATION-REVIEW.md.</td>
+</tr>
+<tr>
+  <td>2</td>
+  <td><code>Shared implementation review — 2026-10-12</code><br><small style="color:var(--muted)">docs/IMPLEMENTATION-REVIEW.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Shared implementation review — 2026-10-12.</td>
+</tr>
+<tr>
+  <td>3</td>
+  <td><code>plan.md</code><br><small style="color:var(--muted)">tasks/plan.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing plan.md.</td>
+</tr>
+<tr>
+  <td>4</td>
+  <td><code>Checkpoint: Evidence</code><br><small style="color:var(--muted)">tasks/plan.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Checkpoint: Evidence.</td>
+</tr>
+<tr>
+  <td>5</td>
+  <td><code>Checkpoint: Protocol</code><br><small style="color:var(--muted)">tasks/plan.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Checkpoint: Protocol.</td>
+</tr>
+<tr>
+  <td>6</td>
+  <td><code>Implementation Plan: Mercedes-Benz Generalization Pilot</code><br><small style="color:var(--muted)">tasks/plan.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Implementation Plan: Mercedes-Benz Generalization Pilot.</td>
+</tr>
+<tr>
+  <td>7</td>
+  <td><code>Open Questions</code><br><small style="color:var(--muted)">tasks/plan.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Open Questions.</td>
+</tr>
+<tr>
+  <td>8</td>
+  <td><code>Overview</code><br><small style="color:var(--muted)">tasks/plan.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Overview.</td>
+</tr>
+<tr>
+  <td>9</td>
+  <td><code>Phase 1: Runner and protocol</code><br><small style="color:var(--muted)">tasks/plan.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Phase 1: Runner and protocol.</td>
+</tr>
+<tr>
+  <td>10</td>
+  <td><code>Phase 2: Bounded execution</code><br><small style="color:var(--muted)">tasks/plan.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Phase 2: Bounded execution.</td>
+</tr>
+<tr>
+  <td>11</td>
+  <td><code>Phase 3: Synthesis and map</code><br><small style="color:var(--muted)">tasks/plan.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Phase 3: Synthesis and map.</td>
+</tr>
+<tr>
+  <td>12</td>
+  <td><code>Risks and Mitigations</code><br><small style="color:var(--muted)">tasks/plan.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Risks and Mitigations.</td>
+</tr>
+<tr>
+  <td>13</td>
+  <td><code>plan-robustness.md</code><br><small style="color:var(--muted)">tasks/plan-robustness.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing plan-robustness.md.</td>
+</tr>
+<tr>
+  <td>14</td>
+  <td><code>Checkpoint: Prepared protocol</code><br><small style="color:var(--muted)">tasks/plan-robustness.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Checkpoint: Prepared protocol.</td>
+</tr>
+<tr>
+  <td>15</td>
+  <td><code>Gaussian-blur follow-up</code><br><small style="color:var(--muted)">tasks/plan-robustness.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Gaussian-blur follow-up.</td>
+</tr>
+<tr>
+  <td>16</td>
+  <td><code>Implementation Plan: Visual Signal Robustness Pilot</code><br><small style="color:var(--muted)">tasks/plan-robustness.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Implementation Plan: Visual Signal Robustness Pilot.</td>
+</tr>
+<tr>
+  <td>17</td>
+  <td><code>Overview</code><br><small style="color:var(--muted)">tasks/plan-robustness.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Overview.</td>
+</tr>
+<tr>
+  <td>18</td>
+  <td><code>Phase 1: Preparation</code><br><small style="color:var(--muted)">tasks/plan-robustness.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Phase 1: Preparation.</td>
+</tr>
+<tr>
+  <td>19</td>
+  <td><code>Phase 2: Execution</code><br><small style="color:var(--muted)">tasks/plan-robustness.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Phase 2: Execution.</td>
+</tr>
+<tr>
+  <td>20</td>
+  <td><code>Phase 3: Audit and synthesis</code><br><small style="color:var(--muted)">tasks/plan-robustness.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Phase 3: Audit and synthesis.</td>
+</tr>
+<tr>
+  <td>21</td>
+  <td><code>Risks</code><br><small style="color:var(--muted)">tasks/plan-robustness.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Risks.</td>
+</tr>
+<tr>
+  <td>22</td>
+  <td><code>Tasks</code><br><small style="color:var(--muted)">tasks/plan-robustness.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Tasks.</td>
+</tr>
+<tr>
+  <td>23</td>
+  <td><code>Task List</code><br><small style="color:var(--muted)">tasks/plan.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Task List.</td>
+</tr>
+<tr>
+  <td>24</td>
+  <td><code>todo.md</code><br><small style="color:var(--muted)">tasks/todo.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing todo.md.</td>
+</tr>
+<tr>
+  <td>25</td>
+  <td><code>Checkpoint</code><br><small style="color:var(--muted)">tasks/todo.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Checkpoint.</td>
+</tr>
+<tr>
+  <td>26</td>
+  <td><code>Mercedes-Benz Generalization Pilot</code><br><small style="color:var(--muted)">tasks/todo.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Mercedes-Benz Generalization Pilot.</td>
+</tr>
+<tr>
+  <td>27</td>
+  <td><code>todo-robustness.md</code><br><small style="color:var(--muted)">tasks/todo-robustness.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing todo-robustness.md.</td>
+</tr>
+<tr>
+  <td>28</td>
+  <td><code>Visual Signal Robustness Pilot</code><br><small style="color:var(--muted)">tasks/todo-robustness.md</small></td>
+  <td><span class="tag tag-func">Concept</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Documentation node describing Visual Signal Robustness Pilot.</td>
+</tr>
+<tr>
+  <td>29</td>
+  <td><code>Baseline condition</code><br><small style="color:var(--muted)">collab/graphify/ARCHITECTURE.md</small></td>
+  <td><span class="tag tag-class">Class</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Baseline condition node in collab/graphify/ARCHITECTURE.md.</td>
+</tr>
+<tr>
+  <td>30</td>
+  <td><code>Behavioral discrepancy is not causal mechanism</code><br><small style="color:var(--muted)">collab/graphify/ARCHITECTURE.md</small></td>
+  <td><span class="tag tag-class">Class</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>Behavioral discrepancy is not causal mechanism node in collab/graphify/ARCHITECTURE.md.</td>
+</tr>
+</table>
+
+<div class="grid">
+  <div class="card">
+    <h4>Key Files</h4>
+    <table style="width:100%;font-size:0.85rem;">
+      <tr><th>File</th><th>Coverage</th></tr>
+      <tr><td><code>collab/graphify/ARCHITECTURE.md</code></td><td>19 nodes</td></tr>
+<tr><td><code>docs/decisions/ADR-001-graphify-workflow.md</code></td><td>12 nodes</td></tr>
+<tr><td><code>tasks/plan.md</code></td><td>11 nodes</td></tr>
+<tr><td><code>tasks/plan-robustness.md</code></td><td>10 nodes</td></tr>
+<tr><td><code>tasks/todo.md</code></td><td>3 nodes</td></tr>
+<tr><td><code>docs/IMPLEMENTATION-REVIEW.md</code></td><td>2 nodes</td></tr>
+<tr><td><code>tasks/todo-robustness.md</code></td><td>2 nodes</td></tr>
+<tr><td><code>experiment/logo-duo-20261019-005644-359883/GEMINI-PROMPT.md</code></td><td>1 nodes</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h4>Design Notes</h4>
+    <p>This section comes from graphify community clustering. Relationship summary: references x54, contains x34, explains x9. The diagram prioritizes high-confidence calls or usage relationships; the table keeps the broader node inventory.</p>
+  </div>
+</div>
+<hr>
+
+<!-- ====== 5. Tests & Fixtures ====== -->
+<h2 id="tests-fixtures">5. Tests &amp; Fixtures</h2>
+<p>Tests &amp; Fixtures groups implementation around test, pilotpy, tests, scripts, mostly in tests/test_collab.py, scripts/semantic_label_pilot.py, tests/test_semantic_label_pilot.py. This section covers 279 nodes and 724 internal edges; the diagram shows only representative relationships to stay readable.</p>
+
+<div class="mermaid">
+%%{init: {"theme": "dark", "themeVariables": {"fontSize": "15.0px", "fontFamily": "Segoe UI, system-ui, sans-serif", "primaryColor": "#1e293b", "primaryTextColor": "#e2e8f0", "primaryBorderColor": "#38bdf8", "secondaryColor": "#0f172a", "tertiaryColor": "#334155", "lineColor": "#64748b", "textColor": "#e2e8f0"}, "flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 64, "padding": 14, "diagramPadding": 10, "useMaxWidth": true}}}%%
+flowchart LR
+    %% Section: Tests &amp; Fixtures (279 nodes, 724 edges)
+    subgraph tests_fixtures_tests_test_logo_duo_pilot_py_594f9fe5["tests/test_logo_duo_pilot.py"]
+        tests_test_logo_duo_pilot_logoduopilottests_545fde88("LogoDuoPilotTests<br/><small>tests/test_logo_duo_pilot.py</small>")
+        tests_test_logo_duo_pilot_logoduopilottests_test_ad06ec3f("test_gemini_prompt_pins_model_and_labels_repeats_as_non_independent()<br/><small>tests/test_logo_duo_pilot.py</small>")
+        tests_test_logo_duo_pilot_logoduopilottests_test_fc810305("test_dataset_row_requests_pin_the_recorded_revision()<br/><small>tests/test_logo_duo_pilot.py</small>")
+        tests_test_logo_duo_pilot_logoduopilottests_test_fa96a557("test_run_tasks_checkpoints_launch_before_call_and_records_failure()<br/><small>tests/test_logo_duo_pilot.py</small>")
+        tests_test_logo_duo_pilot_logoduopilottests_test_716fc5be("test_invoke_rejects_gemini_in_codex_only_runner()<br/><small>tests/test_logo_duo_pilot.py</small>")
+        tests_test_logo_duo_pilot_logoduopilottests_test_41d99544("test_parse_count_accepts_braced_integer_only()<br/><small>tests/test_logo_duo_pilot.py</small>")
+        tests_test_logo_duo_pilot_logoduopilottests_test_68572455("test_select_rows_requires_all_ten_family_pairs()<br/><small>tests/test_logo_duo_pilot.py</small>")
+        tests_test_logo_duo_pilot_logoduopilottests_test_b30974fe("test_build_tasks_runs_three_codex_repeats_per_state()<br/><small>tests/test_logo_duo_pilot.py</small>")
+        tests_test_logo_duo_pilot_logoduopilottests_test_5c3c963c("test_expanded_pilot_uses_ten_fixed_families()<br/><small>tests/test_logo_duo_pilot.py</small>")
+        tests_test_logo_duo_pilot_logoduopilottests_test_d363461a("test_mercedes_arm_is_opt_in_and_uses_four_complete_pairs()<br/><small>tests/test_logo_duo_pilot.py</small>")
+        tests_test_logo_duo_pilot_logoduopilottests_test_8a4db7d4("test_mercedes_tasks_use_brand_specific_prompt()<br/><small>tests/test_logo_duo_pilot.py</small>")
+        tests_test_logo_duo_pilot_logoduopilottests_test_37518b23("test_prepared_run_dir_can_be_checked_without_launching_models()<br/><small>tests/test_logo_duo_pilot.py</small>")
+    end
+    subgraph tests_fixtures_scripts_semantic_label_pilot_py_5e601ce5["scripts/semantic_label_pilot.py"]
+        scripts_semantic_label_pilot_379bcf1e("semantic_label_pilot.py")
+        scripts_semantic_label_pilot_prepare_run_c4af3b02("prepare_run()<br/><small>scripts/semantic_label_pilot.py</small>")
+    end
+    subgraph tests_fixtures_tests_test_collab_py_a90332b8["tests/test_collab.py"]
+        tests_test_collab_integrationtests_82a25b43("IntegrationTests<br/><small>tests/test_collab.py</small>")
+        tests_test_collab_schedulertests_76f2daf2("SchedulerTests<br/><small>tests/test_collab.py</small>")
+    end
+    scripts_collab_main_8cfab17e("main()<br/><small>scripts/collab.py</small>")
+    tests_test_semantic_label_pilot_semanticlabelpil_3f36974c("SemanticLabelPilotTests<br/><small>tests/test_semantic_label_pilot.py</small>")
+    tests_test_logo_duo_pilot_logoduopilottests_545fde88 -->|method| tests_test_logo_duo_pilot_logoduopilottests_test_ad06ec3f
+    tests_test_logo_duo_pilot_logoduopilottests_545fde88 -->|method| tests_test_logo_duo_pilot_logoduopilottests_test_fc810305
+    tests_test_logo_duo_pilot_logoduopilottests_545fde88 -->|method| tests_test_logo_duo_pilot_logoduopilottests_test_fa96a557
+    tests_test_logo_duo_pilot_logoduopilottests_545fde88 -->|method| tests_test_logo_duo_pilot_logoduopilottests_test_716fc5be
+    tests_test_logo_duo_pilot_logoduopilottests_545fde88 -->|method| tests_test_logo_duo_pilot_logoduopilottests_test_41d99544
+    tests_test_logo_duo_pilot_logoduopilottests_545fde88 -->|method| tests_test_logo_duo_pilot_logoduopilottests_test_68572455
+    tests_test_logo_duo_pilot_logoduopilottests_545fde88 -->|method| tests_test_logo_duo_pilot_logoduopilottests_test_b30974fe
+    tests_test_logo_duo_pilot_logoduopilottests_545fde88 -->|method| tests_test_logo_duo_pilot_logoduopilottests_test_5c3c963c
+    tests_test_logo_duo_pilot_logoduopilottests_545fde88 -->|method| tests_test_logo_duo_pilot_logoduopilottests_test_d363461a
+    tests_test_logo_duo_pilot_logoduopilottests_545fde88 -->|method| tests_test_logo_duo_pilot_logoduopilottests_test_8a4db7d4
+    tests_test_logo_duo_pilot_logoduopilottests_545fde88 -->|method| tests_test_logo_duo_pilot_logoduopilottests_test_37518b23
+    %% Omitted for readability: 261 nodes, 0 edges
+    class tests_test_logo_duo_pilot_logoduopilottests_545fde88 test;
+    class tests_test_logo_duo_pilot_logoduopilottests_test_ad06ec3f test;
+    class tests_test_logo_duo_pilot_logoduopilottests_test_fc810305 test;
+    class tests_test_logo_duo_pilot_logoduopilottests_test_fa96a557 test;
+    class tests_test_logo_duo_pilot_logoduopilottests_test_716fc5be test;
+    class tests_test_logo_duo_pilot_logoduopilottests_test_41d99544 test;
+    class tests_test_logo_duo_pilot_logoduopilottests_test_68572455 test;
+    class tests_test_logo_duo_pilot_logoduopilottests_test_b30974fe test;
+    class tests_test_logo_duo_pilot_logoduopilottests_test_5c3c963c test;
+    class tests_test_logo_duo_pilot_logoduopilottests_test_d363461a test;
+    class tests_test_logo_duo_pilot_logoduopilottests_test_8a4db7d4 test;
+    class tests_test_logo_duo_pilot_logoduopilottests_test_37518b23 test;
+    class scripts_semantic_label_pilot_379bcf1e module;
+    class scripts_semantic_label_pilot_prepare_run_c4af3b02 function;
+    class tests_test_collab_integrationtests_82a25b43 test;
+    class tests_test_collab_schedulertests_76f2daf2 test;
+    class scripts_collab_main_8cfab17e function;
+    class tests_test_semantic_label_pilot_semanticlabelpil_3f36974c test;
+    classDef entry fill:#422006,stroke:#fbbf24,color:#fde68a,stroke-width:1px;
+    classDef api fill:#450a0a,stroke:#f87171,color:#fee2e2,stroke-width:1px;
+    classDef async fill:#2e1065,stroke:#a78bfa,color:#ede9fe,stroke-width:1px;
+    classDef klass fill:#064e3b,stroke:#34d399,color:#d1fae5,stroke-width:1px;
+    classDef ui fill:#831843,stroke:#f472b6,color:#fce7f3,stroke-width:1px;
+    classDef module fill:#172554,stroke:#60a5fa,color:#dbeafe,stroke-width:1px;
+    classDef test fill:#3f3f46,stroke:#a1a1aa,color:#f4f4f5,stroke-width:1px;
+    classDef concept fill:#292524,stroke:#a8a29e,color:#fafaf9,stroke-dasharray:4 3;
+    classDef function fill:#0f172a,stroke:#38bdf8,color:#e0f2fe,stroke-width:1px;
+</div>
+
+<h3>Call Details</h3>
+<table class="call-table">
+<tr>
+  <th style="width:5%">#</th>
+  <th style="width:28%">Node</th>
+  <th style="width:10%">Type</th>
+  <th style="width:17%">Caller</th>
+  <th style="width:20%">Callees</th>
+  <th style="width:20%">Description</th>
+</tr>
+<tr>
+  <td>1</td>
+  <td><code>SemanticLabelPilotTests</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Test</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>candidates()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small><br><code>test_api_call_keeps_key_in_header_and_out_of_saved_request()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small><br><code>test_api_failure_summary_distinguishes_model_quota_and_load_errors()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small><br>+28 more</td>
+  <td>Verifies imports, entry points, or version behavior.</td>
+</tr>
+<tr>
+  <td>2</td>
+  <td><code>save()</code><br><small style="color:var(--muted)">scripts/collab.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>interrupted migration hash()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>invoke()</code><br><small style="color:var(--muted)">scripts/logo_duo_pilot.py</small><br><code>invoke()</code><br><small style="color:var(--muted)">scripts/logo_robustness_pilot.py</small><br>+27 more</td>
+  <td><code>json</code></td>
+  <td>save() node in scripts/collab.py.</td>
+</tr>
+<tr>
+  <td>3</td>
+  <td><code>api_failure_summary()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td><code>test_api_failure_summary_distinguishes_model_quota_and_load_errors()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small><br><code>write_answers()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td>No direct outbound edge</td>
+  <td>api_failure_summary() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>4</td>
+  <td><code>bind_task_image()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>invoke()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_image_reference_is_resolved_inside_pilot_run_folder()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small><br><code>test_task_prompt_uses_bound_image_absolute_path()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td>No direct outbound edge</td>
+  <td>bind_task_image() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>5</td>
+  <td><code>build_api_request()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td><code>generate_api()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_direct_api_request_contains_inline_image_and_never_the_key()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><code>base64</code></td>
+  <td>build_api_request() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>6</td>
+  <td><code>build_tasks()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>migrate_v11_label_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>prepare_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><code>random</code></td>
+  <td>build_tasks() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>7</td>
+  <td><code>claude_budget_allows_call()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>run_pilot()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_claude_skips_launch_when_remaining_budget_is_below_observed_call_floor()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td>No direct outbound edge</td>
+  <td>claude_budget_allows_call() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>8</td>
+  <td><code>claude_configuration()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>prepare_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><code>json</code></td>
+  <td>Reads, resolves, or persists project configuration.</td>
+</tr>
+<tr>
+  <td>9</td>
+  <td><code>dataset_candidates()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>prepare_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><code>_integer()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>_request_json()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>species_from_row()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td>dataset_candidates() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>10</td>
+  <td><code>format_response()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>invoke()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_short_integer_answer_is_saved_as_a_valid_runner_report()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><code>json</code><br><code>parse_count()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td>format_response() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>11</td>
+  <td><code>generate_api()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td><code>invoke()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_api_call_keeps_key_in_header_and_out_of_saved_request()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><code>build_api_request()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>json</code><br><code>parse_api_response()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td>generate_api() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>12</td>
+  <td><code>image_extension()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>prepare_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_dataset_image_format_falls_back_to_binary_signature()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td>No direct outbound edge</td>
+  <td>image_extension() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>13</td>
+  <td><code>_integer()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>dataset_candidates()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>select_samples()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td>No direct outbound edge</td>
+  <td>_integer() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>14</td>
+  <td><code>invoke_claude()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>invoke()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><code>claude_command()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>parse_response()</code><br><small style="color:var(--muted)">scripts/collab.py</small><br><code>run_process()</code><br><small style="color:var(--muted)">scripts/collab.py</small><br>+1 more</td>
+  <td>invoke_claude() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>15</td>
+  <td><code>make_custom_command()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-cmd">Entry</span></td>
+  <td><code>make_prompt()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_gemini_command_uses_multimodal_at_file_injection()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td>No direct outbound edge</td>
+  <td>make_custom_command() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>16</td>
+  <td><code>make_prompt()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td><code>make_custom_command()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td>Builds structured prompts for model calls.</td>
+</tr>
+<tr>
+  <td>17</td>
+  <td><code>migrate_v10_claude_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>prepare_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_v10_claude_migration_preserves_gemini_history_and_run_cap()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><code>hashlib</code><br><code>json</code><br><code>save()</code><br><small style="color:var(--muted)">scripts/collab.py</small><br>+2 more</td>
+  <td>migrate_v10_claude_run() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>18</td>
+  <td><code>migrate_v11_label_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>prepare_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_v11_label_migration_supersedes_bad_named_result_but_keeps_generic_result()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><code>build_tasks()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>json</code><br><code>save()</code><br><small style="color:var(--muted)">scripts/collab.py</small><br>+2 more</td>
+  <td>migrate_v11_label_run() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>19</td>
+  <td><code>migrate_v1_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>prepare_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_migration_preserves_bad_attempt_and_supersedes_with_corrected_task()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><code>json</code><br><code>save()</code><br><small style="color:var(--muted)">scripts/collab.py</small><br><code>shutil</code><br>+2 more</td>
+  <td>migrate_v1_run() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>20</td>
+  <td><code>migrate_v2_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>prepare_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_v2_migration_preserves_attempts_and_reenables_gemini_within_same_cap()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><code>json</code><br><code>save()</code><br><small style="color:var(--muted)">scripts/collab.py</small><br><code>shutil</code><br>+1 more</td>
+  <td>migrate_v2_run() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>21</td>
+  <td><code>migrate_v3_api_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td><code>prepare_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_v3_api_migration_preserves_seven_launches_and_versions_task_ids()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><code>hashlib</code><br><code>json</code><br><code>save()</code><br><small style="color:var(--muted)">scripts/collab.py</small><br>+2 more</td>
+  <td>migrate_v3_api_run() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>22</td>
+  <td><code>migrate_v4_model_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>prepare_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_v4_model_migration_records_explicit_user_choice_without_resetting_calls()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><code>json</code><br><code>save()</code><br><small style="color:var(--muted)">scripts/collab.py</small><br><code>shutil</code><br>+1 more</td>
+  <td>migrate_v4_model_run() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>23</td>
+  <td><code>migrate_v5_model_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>prepare_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_v5_model_migration_preserves_quota_circuit_until_explicit_resume()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><code>json</code><br><code>save()</code><br><small style="color:var(--muted)">scripts/collab.py</small><br><code>shutil</code><br>+1 more</td>
+  <td>migrate_v5_model_run() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>24</td>
+  <td><code>migrate_v6_model_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>prepare_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_v6_model_migration_preserves_launches_and_task_attempts()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><code>json</code><br><code>save()</code><br><small style="color:var(--muted)">scripts/collab.py</small><br><code>shutil</code><br>+1 more</td>
+  <td>migrate_v6_model_run() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>25</td>
+  <td><code>migrate_v7_model_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>prepare_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_v7_model_migration_restores_gemini_38_flash()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><code>json</code><br><code>save()</code><br><small style="color:var(--muted)">scripts/collab.py</small><br><code>shutil</code><br>+1 more</td>
+  <td>migrate_v7_model_run() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>26</td>
+  <td><code>migrate_v8_model_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>prepare_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_v8_model_migration_records_requested_31_pro_and_preserves_ledger()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><code>json</code><br><code>save()</code><br><small style="color:var(--muted)">scripts/collab.py</small><br><code>shutil</code><br>+1 more</td>
+  <td>migrate_v8_model_run() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>27</td>
+  <td><code>migrate_v9_model_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>prepare_run()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_v9_model_migration_restores_gemini_38_flash()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><code>json</code><br><code>save()</code><br><small style="color:var(--muted)">scripts/collab.py</small><br><code>shutil</code><br>+1 more</td>
+  <td>migrate_v9_model_run() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>28</td>
+  <td><code>parse_api_response()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-endpoint">API</span></td>
+  <td><code>generate_api()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_api_response_parser_reads_first_text_part_and_rejects_api_error()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td><code>json</code></td>
+  <td>parse_api_response() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>29</td>
+  <td><code>parse_count()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>format_response()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>write_answers()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><code>re</code></td>
+  <td>parse_count() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+<tr>
+  <td>30</td>
+  <td><code>pilot_status()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td><code>run_pilot()</code><br><small style="color:var(--muted)">scripts/semantic_label_pilot.py</small><br><code>test_one_invocation_canary_does_not_mark_the_pilot_global_budget_exhausted()</code><br><small style="color:var(--muted)">tests/test_semantic_label_pilot.py</small></td>
+  <td>No direct outbound edge</td>
+  <td>pilot_status() node in scripts/semantic_label_pilot.py.</td>
+</tr>
+</table>
+
+<div class="grid">
+  <div class="card">
+    <h4>Key Files</h4>
+    <table style="width:100%;font-size:0.85rem;">
+      <tr><th>File</th><th>Coverage</th></tr>
+      <tr><td><code>tests/test_collab.py</code></td><td>67 nodes</td></tr>
+<tr><td><code>scripts/semantic_label_pilot.py</code></td><td>44 nodes</td></tr>
+<tr><td><code>tests/test_semantic_label_pilot.py</code></td><td>33 nodes</td></tr>
+<tr><td><code>scripts/collab.py</code></td><td>30 nodes</td></tr>
+<tr><td><code>scripts/logo_robustness_pilot.py</code></td><td>18 nodes</td></tr>
+<tr><td><code>scripts/logo_duo_pilot.py</code></td><td>16 nodes</td></tr>
+<tr><td><code>tests/test_logo_duo_pilot.py</code></td><td>15 nodes</td></tr>
+<tr><td><code>tests/test_research_constraints.py</code></td><td>10 nodes</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h4>Design Notes</h4>
+    <p>This section comes from graphify community clustering. Relationship summary: calls x354, contains x118, method x107, imports x81. The diagram prioritizes high-confidence calls or usage relationships; the table keeps the broader node inventory.</p>
+  </div>
+</div>
+<hr>
+
+<!-- ====== 6. run-collab.ps1 ====== -->
+<h2 id="run-collab-ps1">6. run-collab.ps1</h2>
+<p>run-collab.ps1 groups implementation around run, collabps1, mostly in run-collab.ps1. This section covers 1 nodes and 0 internal edges; the diagram shows only representative relationships to stay readable.</p>
+
+<div class="mermaid">
+%%{init: {"theme": "dark", "themeVariables": {"fontSize": "15.0px", "fontFamily": "Segoe UI, system-ui, sans-serif", "primaryColor": "#1e293b", "primaryTextColor": "#e2e8f0", "primaryBorderColor": "#38bdf8", "secondaryColor": "#0f172a", "tertiaryColor": "#334155", "lineColor": "#64748b", "textColor": "#e2e8f0"}, "flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 64, "padding": 14, "diagramPadding": 10, "useMaxWidth": true}}}%%
+flowchart LR
+    %% Section: run-collab.ps1 (1 nodes, 0 edges)
+    run_collab_d8cab4b9("run-collab.ps1")
+    class run_collab_d8cab4b9 function;
+    classDef entry fill:#422006,stroke:#fbbf24,color:#fde68a,stroke-width:1px;
+    classDef api fill:#450a0a,stroke:#f87171,color:#fee2e2,stroke-width:1px;
+    classDef async fill:#2e1065,stroke:#a78bfa,color:#ede9fe,stroke-width:1px;
+    classDef klass fill:#064e3b,stroke:#34d399,color:#d1fae5,stroke-width:1px;
+    classDef ui fill:#831843,stroke:#f472b6,color:#fce7f3,stroke-width:1px;
+    classDef module fill:#172554,stroke:#60a5fa,color:#dbeafe,stroke-width:1px;
+    classDef test fill:#3f3f46,stroke:#a1a1aa,color:#f4f4f5,stroke-width:1px;
+    classDef concept fill:#292524,stroke:#a8a29e,color:#fafaf9,stroke-dasharray:4 3;
+    classDef function fill:#0f172a,stroke:#38bdf8,color:#e0f2fe,stroke-width:1px;
+</div>
+
+<h3>Call Details</h3>
+<table class="call-table">
+<tr>
+  <th style="width:5%">#</th>
+  <th style="width:28%">Node</th>
+  <th style="width:10%">Type</th>
+  <th style="width:17%">Caller</th>
+  <th style="width:20%">Callees</th>
+  <th style="width:20%">Description</th>
+</tr>
+<tr>
+  <td>1</td>
+  <td><code>run-collab.ps1</code><br><small style="color:var(--muted)">run-collab.ps1</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>run-collab.ps1 node in run-collab.ps1.</td>
+</tr>
+</table>
+
+<div class="grid">
+  <div class="card">
+    <h4>Key Files</h4>
+    <table style="width:100%;font-size:0.85rem;">
+      <tr><th>File</th><th>Coverage</th></tr>
+      <tr><td><code>run-collab.ps1</code></td><td>1 nodes</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h4>Design Notes</h4>
+    <p>This section comes from graphify community clustering. Relationship summary: No high-confidence call edges detected. The diagram prioritizes high-confidence calls or usage relationships; the table keeps the broader node inventory.</p>
+  </div>
+</div>
+<hr>
+
+<!-- ====== 7. run-semantic-label-pilot.ps1 ====== -->
+<h2 id="run-semantic-label-pilot-ps1">7. run-semantic-label-pilot.ps1</h2>
+<p>run-semantic-label-pilot.ps1 groups implementation around run, semantic, label, pilotps1, mostly in run-semantic-label-pilot.ps1. This section covers 1 nodes and 0 internal edges; the diagram shows only representative relationships to stay readable.</p>
+
+<div class="mermaid">
+%%{init: {"theme": "dark", "themeVariables": {"fontSize": "15.0px", "fontFamily": "Segoe UI, system-ui, sans-serif", "primaryColor": "#1e293b", "primaryTextColor": "#e2e8f0", "primaryBorderColor": "#38bdf8", "secondaryColor": "#0f172a", "tertiaryColor": "#334155", "lineColor": "#64748b", "textColor": "#e2e8f0"}, "flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 64, "padding": 14, "diagramPadding": 10, "useMaxWidth": true}}}%%
+flowchart LR
+    %% Section: run-semantic-label-pilot.ps1 (1 nodes, 0 edges)
+    run_semantic_label_pilot_4456d97a("run-semantic-label-pilot.ps1")
+    class run_semantic_label_pilot_4456d97a function;
+    classDef entry fill:#422006,stroke:#fbbf24,color:#fde68a,stroke-width:1px;
+    classDef api fill:#450a0a,stroke:#f87171,color:#fee2e2,stroke-width:1px;
+    classDef async fill:#2e1065,stroke:#a78bfa,color:#ede9fe,stroke-width:1px;
+    classDef klass fill:#064e3b,stroke:#34d399,color:#d1fae5,stroke-width:1px;
+    classDef ui fill:#831843,stroke:#f472b6,color:#fce7f3,stroke-width:1px;
+    classDef module fill:#172554,stroke:#60a5fa,color:#dbeafe,stroke-width:1px;
+    classDef test fill:#3f3f46,stroke:#a1a1aa,color:#f4f4f5,stroke-width:1px;
+    classDef concept fill:#292524,stroke:#a8a29e,color:#fafaf9,stroke-dasharray:4 3;
+    classDef function fill:#0f172a,stroke:#38bdf8,color:#e0f2fe,stroke-width:1px;
+</div>
+
+<h3>Call Details</h3>
+<table class="call-table">
+<tr>
+  <th style="width:5%">#</th>
+  <th style="width:28%">Node</th>
+  <th style="width:10%">Type</th>
+  <th style="width:17%">Caller</th>
+  <th style="width:20%">Callees</th>
+  <th style="width:20%">Description</th>
+</tr>
+<tr>
+  <td>1</td>
+  <td><code>run-semantic-label-pilot.ps1</code><br><small style="color:var(--muted)">run-semantic-label-pilot.ps1</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>run-semantic-label-pilot.ps1 node in run-semantic-label-pilot.ps1.</td>
+</tr>
+</table>
+
+<div class="grid">
+  <div class="card">
+    <h4>Key Files</h4>
+    <table style="width:100%;font-size:0.85rem;">
+      <tr><th>File</th><th>Coverage</th></tr>
+      <tr><td><code>run-semantic-label-pilot.ps1</code></td><td>1 nodes</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h4>Design Notes</h4>
+    <p>This section comes from graphify community clustering. Relationship summary: No high-confidence call edges detected. The diagram prioritizes high-confidence calls or usage relationships; the table keeps the broader node inventory.</p>
+  </div>
+</div>
+<hr>
+
+<!-- ====== 8. run-series.ps1 ====== -->
+<h2 id="run-series-ps1">8. run-series.ps1</h2>
+<p>run-series.ps1 groups implementation around run, seriesps1, mostly in run-series.ps1. This section covers 1 nodes and 0 internal edges; the diagram shows only representative relationships to stay readable.</p>
+
+<div class="mermaid">
+%%{init: {"theme": "dark", "themeVariables": {"fontSize": "15.0px", "fontFamily": "Segoe UI, system-ui, sans-serif", "primaryColor": "#1e293b", "primaryTextColor": "#e2e8f0", "primaryBorderColor": "#38bdf8", "secondaryColor": "#0f172a", "tertiaryColor": "#334155", "lineColor": "#64748b", "textColor": "#e2e8f0"}, "flowchart": {"htmlLabels": true, "curve": "basis", "nodeSpacing": 48, "rankSpacing": 64, "padding": 14, "diagramPadding": 10, "useMaxWidth": true}}}%%
+flowchart LR
+    %% Section: run-series.ps1 (1 nodes, 0 edges)
+    run_series_8549d678("run-series.ps1")
+    class run_series_8549d678 function;
+    classDef entry fill:#422006,stroke:#fbbf24,color:#fde68a,stroke-width:1px;
+    classDef api fill:#450a0a,stroke:#f87171,color:#fee2e2,stroke-width:1px;
+    classDef async fill:#2e1065,stroke:#a78bfa,color:#ede9fe,stroke-width:1px;
+    classDef klass fill:#064e3b,stroke:#34d399,color:#d1fae5,stroke-width:1px;
+    classDef ui fill:#831843,stroke:#f472b6,color:#fce7f3,stroke-width:1px;
+    classDef module fill:#172554,stroke:#60a5fa,color:#dbeafe,stroke-width:1px;
+    classDef test fill:#3f3f46,stroke:#a1a1aa,color:#f4f4f5,stroke-width:1px;
+    classDef concept fill:#292524,stroke:#a8a29e,color:#fafaf9,stroke-dasharray:4 3;
+    classDef function fill:#0f172a,stroke:#38bdf8,color:#e0f2fe,stroke-width:1px;
+</div>
+
+<h3>Call Details</h3>
+<table class="call-table">
+<tr>
+  <th style="width:5%">#</th>
+  <th style="width:28%">Node</th>
+  <th style="width:10%">Type</th>
+  <th style="width:17%">Caller</th>
+  <th style="width:20%">Callees</th>
+  <th style="width:20%">Description</th>
+</tr>
+<tr>
+  <td>1</td>
+  <td><code>run-series.ps1</code><br><small style="color:var(--muted)">run-series.ps1</small></td>
+  <td><span class="tag tag-func">Function</span></td>
+  <td>External entry / no inbound edge</td>
+  <td>No direct outbound edge</td>
+  <td>run-series.ps1 node in run-series.ps1.</td>
+</tr>
+</table>
+
+<div class="grid">
+  <div class="card">
+    <h4>Key Files</h4>
+    <table style="width:100%;font-size:0.85rem;">
+      <tr><th>File</th><th>Coverage</th></tr>
+      <tr><td><code>run-series.ps1</code></td><td>1 nodes</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h4>Design Notes</h4>
+    <p>This section comes from graphify community clustering. Relationship summary: No high-confidence call edges detected. The diagram prioritizes high-confidence calls or usage relationships; the table keeps the broader node inventory.</p>
+  </div>
+</div>
+<hr>
+
+<h2 id="stats">Project Statistics</h2>
+
+<div class="grid">
+  <div class="card">
+    <h4>Graph</h4>
+    <table style="width:100%;font-size:0.85rem;">
+      <tr><td>Nodes</td><td>416</td></tr>
+      <tr><td>Edges</td><td>961</td></tr>
+      <tr><td>Hyperedges</td><td>0</td></tr>
+      <tr><td>Communities</td><td>19</td></tr>
+      <tr><td>Documented Sections</td><td>7</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h4>Edge Confidence</h4>
+    <table style="width:100%;font-size:0.85rem;">
+      <tr><td>EXTRACTED</td><td>695</td></tr>
+      <tr><td>INFERRED</td><td>266</td></tr>
+      <tr><td>AMBIGUOUS</td><td>0</td></tr>
+    </table>
+  </div>
+</div>
+
+<div style="text-align:center; padding:40px 0; color: var(--muted); font-size:0.9rem;">
+  <p>Bias LLM — Architecture Documentation</p>
+  <p>Generated: 2026-10-19 18:22 UTC · graphify callflow-html</p>
+</div>
+
+</div><!-- .container -->
+
+<script>
+(function () {
+  const mermaidConfig = {
+    startOnLoad: false,
+    theme: 'dark',
+    securityLevel: 'loose',
+    flowchart: { htmlLabels: true, useMaxWidth: true },
+    themeVariables: {
+      primaryColor: '#1e293b',
+      primaryTextColor: '#e2e8f0',
+      primaryBorderColor: '#38bdf8',
+      secondaryColor: '#0f172a',
+      tertiaryColor: '#334155',
+      lineColor: '#64748b',
+      textColor: '#e2e8f0',
+    }
+  };
+
+  mermaid.initialize(mermaidConfig);
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function enhanceMermaidDiagrams() {
+    document.querySelectorAll('.mermaid').forEach((container) => {
+      if (container.dataset.zoomReady === 'true') return;
+      const svg = container.querySelector('svg');
+      if (!svg) return;
+
+      container.dataset.zoomReady = 'true';
+      container.classList.add('is-enhanced');
+
+      const viewport = document.createElement('div');
+      viewport.className = 'mermaid-viewport';
+      svg.parentNode.insertBefore(viewport, svg);
+      viewport.appendChild(svg);
+
+      const toolbar = document.createElement('div');
+      toolbar.className = 'mermaid-toolbar';
+      toolbar.innerHTML = [
+        '<button type="button" data-action="zoom-out" title="Zoom out">-</button>',
+        '<span class="zoom-level" data-role="level">100%</span>',
+        '<button type="button" data-action="zoom-in" title="Zoom in">+</button>',
+        '<button type="button" data-action="fit" title="Fit width">Fit</button>',
+        '<button type="button" data-action="reset" title="Reset view">Reset</button>'
+      ].join('');
+      container.insertBefore(toolbar, viewport);
+
+      const state = { scale: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
+      const level = toolbar.querySelector('[data-role="level"]');
+
+      function applyTransform() {
+        svg.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
+        level.textContent = `${Math.round(state.scale * 100)}%`;
+      }
+
+      function zoomBy(delta) {
+        state.scale = clamp(state.scale + delta, 0.25, 3);
+        applyTransform();
+      }
+
+      function reset() {
+        state.scale = 1;
+        state.x = 0;
+        state.y = 0;
+        applyTransform();
+      }
+
+      function fitWidth() {
+        const rawWidth = svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width
+          ? svg.viewBox.baseVal.width
+          : svg.getBoundingClientRect().width / state.scale;
+        if (!rawWidth) {
+          reset();
+          return;
+        }
+        state.scale = clamp((viewport.clientWidth - 48) / rawWidth, 0.25, 1.4);
+        state.x = 0;
+        state.y = 0;
+        applyTransform();
+      }
+
+      toolbar.addEventListener('click', (event) => {
+        const button = event.target.closest('button[data-action]');
+        if (!button) return;
+        const action = button.dataset.action;
+        if (action === 'zoom-in') zoomBy(0.15);
+        if (action === 'zoom-out') zoomBy(-0.15);
+        if (action === 'fit') fitWidth();
+        if (action === 'reset') reset();
+      });
+
+      viewport.addEventListener('wheel', (event) => {
+        if (!event.ctrlKey && !event.metaKey) return;
+        event.preventDefault();
+        zoomBy(event.deltaY < 0 ? 0.1 : -0.1);
+      }, { passive: false });
+
+      viewport.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        state.dragging = true;
+        state.startX = event.clientX;
+        state.startY = event.clientY;
+        state.originX = state.x;
+        state.originY = state.y;
+        viewport.classList.add('is-dragging');
+        viewport.setPointerCapture(event.pointerId);
+      });
+
+      viewport.addEventListener('pointermove', (event) => {
+        if (!state.dragging) return;
+        state.x = state.originX + event.clientX - state.startX;
+        state.y = state.originY + event.clientY - state.startY;
+        applyTransform();
+      });
+
+      function endDrag(event) {
+        if (!state.dragging) return;
+        state.dragging = false;
+        viewport.classList.remove('is-dragging');
+        if (viewport.hasPointerCapture(event.pointerId)) {
+          viewport.releasePointerCapture(event.pointerId);
+        }
+      }
+
+      viewport.addEventListener('pointerup', endDrag);
+      viewport.addEventListener('pointercancel', endDrag);
+      applyTransform();
+    });
+  }
+
+  function renderMermaid() {
+    const result = mermaid.run
+      ? mermaid.run({ querySelector: '.mermaid' })
+      : Promise.resolve();
+    Promise.resolve(result)
+      .then(enhanceMermaidDiagrams)
+      .catch((error) => {
+        console.error('Mermaid render failed:', error);
+        enhanceMermaidDiagrams();
+      });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', renderMermaid);
+  } else {
+    renderMermaid();
+  }
+})();
+</script>
+
+</body>
+</html>

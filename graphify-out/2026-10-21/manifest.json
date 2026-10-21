@@ -1,0 +1,218 @@
+{
+  "run-collab.ps1": {
+    "mtime": 1792258174.1346726,
+    "seen": 1792344634.420262,
+    "ast_hash": "c0b37eb946fef6c354a772c16a30ff49",
+    "semantic_hash": "c0b37eb946fef6c354a772c16a30ff49"
+  },
+  "run-semantic-label-pilot.ps1": {
+    "mtime": 1791988996.2883708,
+    "seen": 1792344634.4202752,
+    "ast_hash": "c5cfaa5fd638ba6734593a09bda021c8",
+    "semantic_hash": "c5cfaa5fd638ba6734593a09bda021c8"
+  },
+  "run-series.ps1": {
+    "mtime": 1791812719.3553133,
+    "seen": 1792344634.4202814,
+    "ast_hash": "7a5967ac723dbd6f464d17740326f3f0",
+    "semantic_hash": "7a5967ac723dbd6f464d17740326f3f0"
+  },
+  "scripts/collab.py": {
+    "mtime": 1792258169.6395922,
+    "seen": 1792344634.420285,
+    "ast_hash": "564db30d93b7748222396ab1c2ccacad",
+    "semantic_hash": "564db30d93b7748222396ab1c2ccacad"
+  },
+  "scripts/delegate_setup.py": {
+    "mtime": 1791738124.0291734,
+    "seen": 1792344634.420288,
+    "ast_hash": "d715ae735cfdf1c1bfe47bccf0b3a38d",
+    "semantic_hash": "d715ae735cfdf1c1bfe47bccf0b3a38d"
+  },
+  "scripts/logo_duo_pilot.py": {
+    "mtime": 1792346295.2033505,
+    "seen": 1792347246.7942996,
+    "ast_hash": "3750fa320debf039193b2979bec545a4",
+    "semantic_hash": ""
+  },
+  "scripts/semantic_label_pilot.py": {
+    "mtime": 1792094421.571752,
+    "seen": 1792344634.4202938,
+    "ast_hash": "871967cb46e4ce8e13c59a60801913ea",
+    "semantic_hash": "871967cb46e4ce8e13c59a60801913ea"
+  },
+  "tests/test_collab.py": {
+    "mtime": 1792258139.2501488,
+    "seen": 1792344634.4202964,
+    "ast_hash": "cabac8985451465e61f0c8c5792f7f45",
+    "semantic_hash": "cabac8985451465e61f0c8c5792f7f45"
+  },
+  "tests/test_logo_duo_pilot.py": {
+    "mtime": 1792347199.3375726,
+    "seen": 1792347246.7943087,
+    "ast_hash": "ae25ce70604baceb3acc3734ae1eb204",
+    "semantic_hash": ""
+  },
+  "tests/test_semantic_label_pilot.py": {
+    "mtime": 1792094408.0842485,
+    "seen": 1792344634.4203017,
+    "ast_hash": "954e1617acdd10ad3986b96591a34d3d",
+    "semantic_hash": "954e1617acdd10ad3986b96591a34d3d"
+  },
+  "scripts/augment_graphify_architecture.py": {
+    "mtime": 1792599610.2390819,
+    "seen": 1792599630.942958,
+    "ast_hash": "f5bbb7a3100b9ce10fd9273ed6148900",
+    "semantic_hash": ""
+  },
+  "scripts/check_research_constraints.py": {
+    "mtime": 1792345707.1032977,
+    "seen": 1792347246.7942889,
+    "ast_hash": "d8f00e35f8b1504177e67d1c27097842",
+    "semantic_hash": ""
+  },
+  "tests/test_research_constraints.py": {
+    "mtime": 1792345714.6312902,
+    "seen": 1792347246.7943118,
+    "ast_hash": "e843123ca19bbb2dcfaefdd933bab690",
+    "semantic_hash": ""
+  },
+  "AGENTS.md": {
+    "mtime": 1792345303.153192,
+    "seen": 1792345340.4971316,
+    "ast_hash": "063d64b07b7c337c4a943d0883515686",
+    "semantic_hash": ""
+  },
+  "CLAUDE.md": {
+    "mtime": 1792345071.5798357,
+    "seen": 1792345340.4971333,
+    "ast_hash": "12022318e55967216c183efca28bfc84",
+    "semantic_hash": ""
+  },
+  "CONSTRAINTS.md": {
+    "mtime": 1792345696.86649,
+    "seen": 1792347246.7943287,
+    "ast_hash": "bb2c0eb2c6e4954ff328e7edcc854357",
+    "semantic_hash": ""
+  },
+  "GEMINI.md": {
+    "mtime": 1792345303.153192,
+    "seen": 1792345340.4971356,
+    "ast_hash": "46e985205b56ff006a031a9e62844a36",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1792599588.4590454,
+    "seen": 1792599630.9430215,
+    "ast_hash": "f834f7215a69dd7e9406e9da3d763ccd",
+    "semantic_hash": ""
+  },
+  "docs/COLLAB.md": {
+    "mtime": 1792339387.9502997,
+    "seen": 1792345340.4971385,
+    "ast_hash": "bcca73c0d645f93a5bf51930036a8aab",
+    "semantic_hash": ""
+  },
+  "docs/IMPLEMENTATION-REVIEW.md": {
+    "mtime": 1791738982.6905084,
+    "seen": 1792345340.49714,
+    "ast_hash": "92e55c9a02e353eb5dff4c254f53d72b",
+    "semantic_hash": ""
+  },
+  "docs/decisions/ADR-001-graphify-workflow.md": {
+    "mtime": 1792430550.2029972,
+    "seen": 1792434152.459797,
+    "ast_hash": "29311030bf90e936ae523e19c8d3ffad",
+    "semantic_hash": ""
+  },
+  "docs/superpowers/specs/2026-10-11-collab-orchestrator-design.md": {
+    "mtime": 1791738199.2777238,
+    "seen": 1792345340.497142,
+    "ast_hash": "2e878c9529ac238e4c7f8f90983281b7",
+    "semantic_hash": ""
+  },
+  "requirements.txt": {
+    "mtime": 1792351134.5519533,
+    "seen": 1792352555.8052423,
+    "ast_hash": "82d6e2ea318c57b5788a3554c45675a7",
+    "semantic_hash": ""
+  },
+  "New folder/ICLR-2026-vision-language-models-are-biased-Paper-Conference.pdf": {
+    "mtime": 1791732992.4140632,
+    "seen": 1792345340.4971445,
+    "ast_hash": "eb98b3385cf6c148ee926d42abf30dbe",
+    "semantic_hash": ""
+  },
+  ".playwright-mcp/page-2026-10-18T17-44-39-516Z.yml": {
+    "mtime": 1792345479.5243413,
+    "seen": 1792347246.7943187,
+    "ast_hash": "13410e0b7a4c6d1de9afc1f75acb2831",
+    "semantic_hash": ""
+  },
+  "tasks/plan.md": {
+    "mtime": 1792599554.9423118,
+    "seen": 1792599630.9430497,
+    "ast_hash": "580ab28f18a2b10eba9d510014566590",
+    "semantic_hash": ""
+  },
+  "tasks/todo.md": {
+    "mtime": 1792347221.843619,
+    "seen": 1792347246.7943552,
+    "ast_hash": "b402a5ded4cb5c035276ac8901cc0c96",
+    "semantic_hash": ""
+  },
+  "output/playwright/graphify.png": {
+    "mtime": 1792345495.7515712,
+    "seen": 1792347246.7943609,
+    "ast_hash": "102a315279c32c402c9590bb98010bca",
+    "semantic_hash": ""
+  },
+  "scripts/logo_robustness_pilot.py": {
+    "mtime": 1792594174.0000825,
+    "seen": 1792596021.947634,
+    "ast_hash": "633ffb1e4eaa2fd31e76d7fa195a6e73",
+    "semantic_hash": ""
+  },
+  "tests/test_logo_robustness_pilot.py": {
+    "mtime": 1792594199.2109919,
+    "seen": 1792596021.9476397,
+    "ast_hash": "5f91fc111f87f4dd484fb9c50cc71517",
+    "semantic_hash": ""
+  },
+  "tasks/plan-robustness.md": {
+    "mtime": 1792596658.9519536,
+    "seen": 1792599630.9430466,
+    "ast_hash": "bb22724cac82a0359c2ef872dbf029c6",
+    "semantic_hash": ""
+  },
+  "tasks/todo-robustness.md": {
+    "mtime": 1792352531.325152,
+    "seen": 1792352555.8052459,
+    "ast_hash": "89db73582460b877c9f166e9c8e4cdf8",
+    "semantic_hash": ""
+  },
+  "skill-observations/cross-cutting-principles.md": {
+    "mtime": 1792581091.3318057,
+    "seen": 1792582957.9793646,
+    "ast_hash": "96ed9bef24f7de9561c4f00d2a00a29d",
+    "semantic_hash": ""
+  },
+  "skill-observations/last-review-date.txt": {
+    "mtime": 1792581091.3268547,
+    "seen": 1792582957.979366,
+    "ast_hash": "dd34e94b95abf02e177b48f0366099d9",
+    "semantic_hash": ""
+  },
+  "scripts/logo_paired_sham_pilot.py": {
+    "mtime": 1792598064.4071176,
+    "seen": 1792599630.9429767,
+    "ast_hash": "292fcaacf4e6dff5b59621bd0ce3a440",
+    "semantic_hash": ""
+  },
+  "tests/test_logo_paired_sham_pilot.py": {
+    "mtime": 1792598117.3556738,
+    "seen": 1792599630.9429934,
+    "ast_hash": "a4bbe4db73d275aea51abf0703ec3160",
+    "semantic_hash": ""
+  }
+}
