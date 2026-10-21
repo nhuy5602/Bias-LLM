@@ -1,0 +1,8 @@
+# Package versions were availability-checked with `python -m pip index`.
+# CUDA and attention-kernel compatibility is re-checked on the target image
+# before the first paid run and recorded in the run manifest.
+torch==2.14.1
+transformers==4.57.6
+qwen-vl-utils==0.0.14
+accelerate==1.15.0
+Pillow==12.2.0
