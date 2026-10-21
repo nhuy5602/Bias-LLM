@@ -18,7 +18,7 @@ from open_vlm.runner import (  # noqa: E402
 
 class PassingFakeBackend:
     def run(self, task, method):
-        prediction = task['prior_answer'] if method == 'free_generation' else task['ground_truth']
+        prediction = task['prior_answer'] if method in {'free_generation', 'candidate_scoring'} else task['ground_truth']
         return {
             'prediction': prediction,
             'score_trace': {'method': method},
@@ -39,7 +39,7 @@ def rows():
                 'ground_truth': 4,
                 'expected_bias': 5,
             })
-    for index in range(5):
+    for index in range(20):
         values.append({
             'domain': 'flags',
             'family': f'flags-{index}',
@@ -70,7 +70,8 @@ class OpenVlmEndToEndTests(unittest.TestCase):
             held_out = run_held_out(manifest, backend)
             self.assertEqual(smoke['scientific_decision'], 'NOT_EVALUATED')
             self.assertEqual(development['status'], 'PASS')
-            self.assertEqual(held_out['status'], 'COMPLETED')
+            self.assertEqual(held_out['status'], 'PASS')
+            self.assertEqual(development['baseline_candidate']['accuracy'], 0.0)
             self.assertEqual(development['method']['accuracy'], 1.0)
             self.assertEqual(development['method']['other_error_rate'], 0.0)
 

@@ -24,6 +24,7 @@ class QwenBackend:
             'attention': runtime_config.get('attention', 'sdpa'),
         }
         self._active_prompt = 'Return only the requested answer.'
+        self._last_image_token_count = None
 
     @classmethod
     def from_manifest(cls, manifest):
@@ -66,6 +67,34 @@ class QwenBackend:
             return int(value)
         raise ValueError('Image token count is required for parity checks')
 
+    def _prepare_hf(self, image):
+        self._ensure_loaded()
+        messages = [{'role': 'user', 'content': [
+            {'type': 'image', 'image': str(Path(image).resolve())},
+            {'type': 'text', 'text': self._active_prompt},
+        ]}]
+        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        from qwen_vl_utils import process_vision_info
+        image_inputs, video_inputs = process_vision_info(messages)
+        inputs = self.processor(text=[text], images=image_inputs, videos=video_inputs,
+                                padding=True, return_tensors='pt').to(self.runtime['device'])
+        grid = inputs.get('image_grid_thw')
+        if grid is None:
+            raise ValueError('Qwen processor did not return image_grid_thw')
+        shape = getattr(grid, 'shape', ())
+        values = list(grid[0]) if len(grid) and len(shape) > 1 else list(grid)
+        token_count = math.prod(int(value) for value in values)
+        self._last_image_token_count = token_count
+        return inputs, token_count
+
+    def _resolve_image_token_count(self, image):
+        try:
+            return self._image_token_count(image)
+        except ValueError:
+            if isinstance(image, (str, Path)):
+                return self._prepare_hf(image)[1]
+            raise
+
     def _score_image(self, image, candidate):
         if isinstance(image, dict) and 'scores' in image:
             return image['scores'][candidate]
@@ -80,47 +109,31 @@ class QwenBackend:
             if generator is None:
                 raise RuntimeError('Injected Qwen model has no generate method')
             return generator(image, prompt)
-        self._ensure_loaded()
-        messages = [{'role': 'user', 'content': [
-            {'type': 'image', 'image': str(Path(image).resolve())},
-            {'type': 'text', 'text': prompt},
-        ]}]
-        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        from qwen_vl_utils import process_vision_info
-        image_inputs, video_inputs = process_vision_info(messages)
-        inputs = self.processor(text=[text], images=image_inputs, videos=video_inputs,
-                                padding=True, return_tensors='pt').to(self.runtime['device'])
+        self._active_prompt = prompt
+        inputs, _ = self._prepare_hf(image)
         output_ids = self.model.generate(**inputs, max_new_tokens=16)
         generated = output_ids[:, inputs.input_ids.shape[1]:]
         return self.processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
 
     def _score_hf_image(self, image, candidate):
-        self._ensure_loaded()
-        messages = [{'role': 'user', 'content': [
-            {'type': 'image', 'image': str(Path(image).resolve())},
-            {'type': 'text', 'text': self._active_prompt},
-        ]}]
-        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        from qwen_vl_utils import process_vision_info
-        image_inputs, video_inputs = process_vision_info(messages)
-        inputs = self.processor(text=[text], images=image_inputs, videos=video_inputs,
-                                padding=True, return_tensors='pt').to(self.runtime['device'])
+        inputs, _ = self._prepare_hf(image)
+        import torch
         candidate_ids = self.processor.tokenizer(
             candidate, add_special_tokens=False, return_tensors='pt').input_ids.to(self.runtime['device'])
         prompt_length = inputs.input_ids.shape[1]
-        inputs.input_ids = __import__('torch').cat([inputs.input_ids, candidate_ids], dim=1)
-        inputs.attention_mask = __import__('torch').ones_like(inputs.input_ids)
-        with __import__('torch').no_grad():
+        inputs.input_ids = torch.cat([inputs.input_ids, candidate_ids], dim=1)
+        inputs.attention_mask = torch.ones_like(inputs.input_ids)
+        with torch.no_grad():
             logits = self.model(**inputs).logits[0]
-        log_probs = __import__('torch').log_softmax(logits, dim=-1)
+        log_probs = torch.log_softmax(logits, dim=-1)
         token_scores = []
         for offset, token_id in enumerate(candidate_ids[0]):
             token_scores.append(float(log_probs[prompt_length - 1 + offset, token_id]))
         return token_scores
 
     def score_image_pair(self, clear, prior, candidates, alpha):
-        clear_tokens = self._image_token_count(clear)
-        prior_tokens = self._image_token_count(prior)
+        clear_tokens = self._resolve_image_token_count(clear)
+        prior_tokens = self._resolve_image_token_count(prior)
         if clear_tokens != prior_tokens:
             raise ValueError('clear/prior image-token count must match')
         clear_scores = score_candidates(candidates, lambda candidate: self._score_image(clear, candidate))['scores']
@@ -150,12 +163,12 @@ class QwenBackend:
                     'method': method,
                     'prediction': self._generate(task['image'], prompt),
                     'forward_passes': 1,
-                    'image_token_count': self._image_token_count(task['image']),
+                    'image_token_count': self._resolve_image_token_count(task['image']),
                 }
             if method == 'candidate_scoring':
                 result = score_candidates(candidates, lambda candidate: self._score_image(task['image'], candidate))
                 return {**result, 'method': method, 'forward_passes': 1,
-                        'image_token_count': self._image_token_count(task['image'])}
+                        'image_token_count': self._resolve_image_token_count(task['image'])}
             if method == 'prior_contrastive':
                 return {**self.score_image_pair(task['image'], task['prior_image'], candidates,
                                                 task['alpha']), 'method': method}
@@ -166,7 +179,7 @@ class QwenBackend:
                 result = score_candidates(candidates, lambda candidate: self._score_image(roi_image, candidate))
                 return {**result, 'method': method, 'roi_kind': method,
                         'forward_passes': 1,
-                        'image_token_count': self._image_token_count(roi_image)}
+                        'image_token_count': self._resolve_image_token_count(roi_image)}
             raise ValueError(f'Unsupported Qwen method: {method}')
         finally:
             self._active_prompt = 'Return only the requested answer.'

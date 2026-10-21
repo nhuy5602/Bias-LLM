@@ -111,11 +111,15 @@ class OpenVlmSchemaTests(unittest.TestCase):
             'license_attestations': {'dataset': 'verified', 'model': 'verified'},
             'seed': 20261022,
             'processor': {'min_pixels': 256, 'max_pixels': 512},
+            'model': {'id': 'Qwen/Qwen2.5-VL-3B-Instruct', 'revision': 'main'},
+            'runtime': {'device': 'cuda', 'dtype': 'bfloat16', 'attention': 'sdpa'},
             'method': {'sigmas': [1, 3, 6, 12], 'alphas': [0.25, 0.5, 1.0, 2.0]},
         }
         manifest = build_manifest(rows, config)
         self.assertEqual(manifest['dataset_revision'], DATASET_REVISION)
         self.assertEqual(manifest['scientific_status'], 'NEEDS_EVIDENCE')
+        self.assertEqual(manifest['model']['id'], 'Qwen/Qwen2.5-VL-3B-Instruct')
+        self.assertEqual(manifest['runtime']['attention'], 'sdpa')
         self.assertFalse(manifest['family_split']['animals']['eligible'])
         self.assertEqual(manifest['family_split']['animals']['family_count'], 4)
         serialized = json.dumps(manifest, sort_keys=True, ensure_ascii=True)

@@ -156,6 +156,8 @@ def build_manifest(rows, config):
         'license_attestations': attestations,
         'seed': seed,
         'processor': config.get('processor', {}),
+        'model': config.get('model', {}),
+        'runtime': config.get('runtime', {}),
         'method': config.get('method', {}),
         'family_split': family_split,
         'rows': sorted(normalized, key=_row_key),

@@ -69,6 +69,7 @@ The domain contract is explicit:
 | Domain | Answer set | Prior field | Eligibility |
 |---|---|---|---|
 | animals/logos/flags/boards | integer range from dataset metadata, default `0..20` | `expected_bias` | require integer `ground_truth` and `expected_bias` |
+| chess | task-specific set from the row schema | `expected_bias` or verified bias-answer field | fail closed if the schema is ambiguous |
 | grids | task-specific set from the row schema | `expected_bias` or verified bias-answer field | fail closed if the schema is ambiguous |
 | illusions | `{yes, no}` | verified categorical bias-answer field | never coerce to integers |
 

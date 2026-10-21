@@ -4,12 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
+from open_vlm.qwen_backend import QwenBackend
 from open_vlm.runner import run_development, run_held_out, run_smoke
-
-
-class NoopBackend:
-    def run(self, task, method):
-        raise RuntimeError('No model backend configured; use --dry-run')
 
 
 def main(argv=None):
@@ -19,21 +15,25 @@ def main(argv=None):
     phase.add_argument('--smoke', action='store_true')
     phase.add_argument('--development', action='store_true')
     phase.add_argument('--held-out', action='store_true')
+    phase.add_argument('--no-regression', action='store_true')
     parser.add_argument('--run-dir', type=Path, required=True)
     args = parser.parse_args(argv)
     manifest_path = args.run_dir / 'manifest.json'
     if not manifest_path.is_file():
         raise SystemExit(f'Missing manifest: {manifest_path}')
     manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-    backend = NoopBackend()
+    backend = QwenBackend.from_manifest(manifest)
     if args.dry_run:
         result = {'phase': manifest.get('phase', 'unknown'), 'status': 'DRY_RUN', 'calls': 0}
     elif args.smoke:
         result = run_smoke(manifest, backend)
     elif args.development:
         result = run_development(manifest, backend)
-    else:
+    elif args.held_out:
         result = run_held_out(manifest, backend)
+    else:
+        from open_vlm.runner import run_no_regression
+        result = run_no_regression(manifest, backend)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

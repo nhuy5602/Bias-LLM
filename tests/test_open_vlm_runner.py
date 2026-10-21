@@ -9,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from open_vlm.runner import (  # noqa: E402
     prepare_run,
     run_development,
+    run_held_out,
+    run_no_regression,
     run_smoke,
     safe_upload_then_delete,
 )
@@ -92,10 +94,63 @@ class OpenVlmRunnerTests(unittest.TestCase):
 
     def test_development_gate_redirects_when_method_fails(self):
         rows = manifest_rows(10)
-        backend = FakeBackend(method_predictions={'free_generation': 5, 'prior_contrastive': 7})
+        backend = FakeBackend(method_predictions={
+            'free_generation': 5, 'candidate_scoring': 5, 'prior_contrastive': 7,
+        })
         result = run_development({'rows': rows, 'scientific_status': 'NEEDS_EVIDENCE'}, backend)
         self.assertEqual(result['status'], 'BUDGET_STOPPED')
         self.assertEqual(result['next_action'], 'attention_logit_lens')
+
+    def test_development_gates_contrastive_against_candidate_scoring(self):
+        rows = manifest_rows(10)
+        backend = FakeBackend(method_predictions={
+            'free_generation': 4, 'candidate_scoring': 5, 'prior_contrastive': 4,
+        })
+        result = run_development({'rows': rows, 'scientific_status': 'NEEDS_EVIDENCE'}, backend)
+        self.assertEqual(result['status'], 'PASS')
+        self.assertEqual(result['baseline_candidate']['accuracy'], 0.0)
+        self.assertEqual(result['method']['accuracy'], 1.0)
+        self.assertIn(('task-000', 'candidate_scoring'), backend.calls)
+
+    def test_development_uses_only_registered_dev_families(self):
+        rows = manifest_rows(10)
+        for row in rows:
+            row['task_id'] = row['family']
+        manifest = {
+            'rows': rows,
+            'family_split': {
+                'animals': {'dev_families': ['animals-000']},
+                'logos': {'dev_families': ['logos-001']},
+            },
+        }
+        backend = FakeBackend(method_predictions={
+            'free_generation': 5, 'candidate_scoring': 5, 'prior_contrastive': 4,
+        })
+        run_development(manifest, backend)
+        called_ids = {task_id for task_id, _method in backend.calls}
+        self.assertEqual(called_ids, {'animals-000', 'logos-001'})
+
+    def test_held_out_returns_clustered_primary_gate(self):
+        rows = [{
+            'domain': 'flags',
+            'family': f'flags-{index:02}',
+            'image_path': f'images/flags-{index:02}.png',
+            'ground_truth': 4,
+            'prior_answer': 5,
+            'expected_bias': 5,
+            'task_id': f'flag-task-{index:02}',
+        } for index in range(20)]
+        backend = FakeBackend(method_predictions={
+            'free_generation': 4, 'candidate_scoring': 5, 'prior_contrastive': 4,
+        })
+        result = run_held_out({'rows': rows, 'scientific_status': 'NEEDS_EVIDENCE'}, backend)
+        self.assertEqual(result['status'], 'PASS')
+        self.assertEqual(result['baseline_candidate']['accuracy'], 0.0)
+        self.assertEqual(result['gate']['status'], 'PASS')
+
+    def test_no_regression_requires_both_registered_sets(self):
+        result = run_no_regression({'rows': []}, FakeBackend())
+        self.assertEqual(result['status'], 'INCONCLUSIVE')
 
     def test_upload_failure_preserves_pod(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -19,7 +19,7 @@ DELETER="${OPEN_VLM_DELETER:-}"
 POD_ID="${OPEN_VLM_POD_ID:-}"
 
 case "$PHASE" in
-  smoke|development|held-out) ;;
+  smoke|development|held-out|no-regression) ;;
   *) echo "unsupported phase: $PHASE" >&2; exit 2 ;;
 esac
 
