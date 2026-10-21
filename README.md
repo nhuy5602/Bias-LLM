@@ -49,12 +49,24 @@ Trần lượt CLI/thời gian không phải trần tiền tuyệt đối: mỗi
     python scripts/check_research_constraints.py .
     python scripts/logo_duo_pilot.py --include-mercedes --dry-run
     python scripts/logo_duo_pilot.py --run-dir <prepared-run-folder>
+    python scripts/open_vlm_pilot.py --dry-run --run-dir <open-vlm-run-dir>
+    ./run-open-vlm.sh smoke <open-vlm-run-dir>
 
 `-Duo -NewRun` tạo một ledger mới chỉ với Codex và Gemini. Hai thành viên giữ
 vai trò `pilot` và `evidence_gate`, phản biện chéo lẫn nhau; Claude không được
 gọi, không xuất hiện trong task/report/synthesis, và ledger duo không tự tiếp
 quản một run ba thành viên. Dùng `-Duo -ContinueLatest` để tạo ledger tiếp nối
 một proposal round đã hoàn tất của duo.
+
+## Open-VLM track
+
+The `open-vlm` track is an additive Linux/GPU path for Qwen2.5-VL. It keeps
+free-generation and candidate-scoring baselines separate, validates the
+blur-as-prior assumption before contrastive decoding, and records image-token
+parity, source-family splits, metrics, controls, and cleanup checks. The first
+dry-run and fake-backend tests require no GPU or model download. Paid execution
+must use `run-open-vlm.sh`, upload artifacts and verify checksums before pod
+deletion, and remains scientifically `NEEDS_EVIDENCE`.
 
 -ContinueLatest lấy proposal đã xác minh của vòng gần nhất (3 ở full mode, 2 ở duo mode), chạy đúng một vòng phản biện/sửa đề xuất rồi tổng hợp. Nó tạo budget ledger mới, giữ PDF và role ownership, đồng thời từ chối nếu report/hash đầu vào không khớp. -ExtendBudget tiếp tục ledger mới nhất sau khi quota hết; chỉ cho giữ nguyên hoặc tăng thời gian/per-member-call ceilings, không giảm hoặc reset calls, retries, costs, đổi nguồn hay model. Mọi lần tăng thực tế được ghi trong manifest. Dùng -ResumeRunId cùng -ExtendBudget để tiếp tục một ledger cũ mà không đổi latest.json; controller vẫn kiểm tra source hash và report hash. -RepairGemini dùng prompt đã lưu để chạy riêng tác vụ Gemini đã hết retry, giữ nguyên lịch sử timeout và tạo synthesis reconciliation mới. -RepairGeminiSynthesis có thể chạy một tác vụ synthesis recovery riêng sau bốn timeout; lượt recovery có ledger riêng, không tăng số retry của task gốc. Timeout riêng mặc định 600 giây; task recovery vẫn tối đa 3 retry. -UnlimitedBudget chỉ dùng với -ExtendBudget hoặc -ContinueLatest; bỏ trần tổng/per-member calls, elapsed time và USD kể cả Claude native, nhưng giữ timeout từng request và tối đa 3 retry. Mọi launch, retry, elapsed time và chi phí CLI báo được vẫn ghi vào ledger. `run-series.ps1` tiếp tục tuần tự tới số vòng được yêu cầu, cập nhật series ledger sau mỗi run, và dừng ở trạng thái chưa hoàn tất. -NewRun tạo nghiên cứu độc lập từ đầu. Nếu sửa PDF, giới hạn hoặc controller, không tái sử dụng kết quả cũ một cách ngầm định. OS lock ngăn chạy hai controller đồng thời. Không kill cứng controller; dùng Ctrl+C để dọn cây tiến trình.
 
