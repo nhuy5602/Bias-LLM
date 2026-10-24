@@ -58,6 +58,10 @@ class OpenVlmEndToEndTests(unittest.TestCase):
             'seed': 20261022,
             'processor': {'min_pixels': 256, 'max_pixels': 512},
             'method': {'sigmas': [1, 3, 6, 12], 'alphas': [0.25, 0.5, 1.0, 2.0]},
+            'step0_records': [{'sigma': 3, 'subject_valid_rate': 1.0,
+                               'invalid_rate': 0.0, 'clear_accuracy': 1.0,
+                               'blur_accuracy': 0.0, 'blur_bias_rate': 1.0,
+                               'black_bias_rate': 0.0}],
         }
 
     def test_fake_run_covers_manifest_phases_metrics_and_cleanup(self):

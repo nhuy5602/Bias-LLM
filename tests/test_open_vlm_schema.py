@@ -94,6 +94,25 @@ class OpenVlmSchemaTests(unittest.TestCase):
         self.assertTrue({r['family'] for r in first['dev']}.isdisjoint(
             {r['family'] for r in first['same_domain_test']}))
 
+    def test_split_keeps_at_least_two_same_domain_test_families(self):
+        rows = [
+            {'domain': 'animals', 'family': f'family-{index:02}', 'row_id': index}
+            for index in range(5)
+        ]
+        split = split_families(rows, seed=17)
+        self.assertEqual(len({r['family'] for r in split['same_domain_test']}), 2)
+        self.assertEqual(len({r['family'] for r in split['dev']}), 3)
+
+    def test_windows_separator_is_normalized_on_all_platforms(self):
+        row = validate_row({
+            'domain': 'animals',
+            'family': 'animal-01',
+            'ground_truth': 4,
+            'expected_bias': 5,
+            'image_path': r'images\animal-01.png',
+        }, self.integer_domain())
+        self.assertEqual(row['image_path'], 'images/animal-01.png')
+
     def test_manifest_records_revision_licenses_and_minimum_family_status(self):
         rows = [
             {

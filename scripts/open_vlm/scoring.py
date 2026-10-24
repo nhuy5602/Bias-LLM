@@ -3,6 +3,7 @@
 from collections import defaultdict
 import math
 import random
+import re
 from statistics import mean
 
 DEVELOPMENT_BIAS_DELTA = 0.05
@@ -11,6 +12,13 @@ MAX_ACCURACY_DROP = 0.05
 MAX_OTHER_ERROR_INCREASE = 0.05
 MAX_INVALID_RATE = 0.05
 LABELS = ('Correct', 'Bias-aligned', 'Other errors')
+
+
+def parse_free_generation(raw, candidates):
+    """Accept only an exact registered answer, preserving free-generation invalids."""
+    text = str(raw).strip()
+    normalized = {str(candidate).strip().casefold(): str(candidate).strip() for candidate in candidates}
+    return normalized.get(text.casefold())
 
 
 def _aggregate_score(raw_score):
@@ -72,6 +80,28 @@ def summarize(rows) -> dict:
         'bias_rate': counts['Bias-aligned'] / denominator,
         'other_error_rate': counts['Other errors'] / denominator,
         'invalid_rate': sum(row.get('prediction') is None for row in rows) / denominator,
+    }
+
+
+def summarize_clustered(rows) -> dict:
+    grouped = defaultdict(list)
+    for row in rows:
+        key = (row.get('domain', ''), row.get('family'))
+        grouped[key].append(row)
+    if not grouped:
+        return {**summarize(rows), 'family_count': 0, 'clustered': True}
+    summaries = [summarize(group) for group in grouped.values()]
+    count = len(summaries)
+    return {
+        'counts': {label: mean(summary['counts'][label] / max(summary['total'], 1) for summary in summaries)
+                   for label in LABELS},
+        'total': sum(summary['total'] for summary in summaries),
+        'accuracy': mean(summary['accuracy'] for summary in summaries),
+        'bias_rate': mean(summary['bias_rate'] for summary in summaries),
+        'other_error_rate': mean(summary['other_error_rate'] for summary in summaries),
+        'invalid_rate': mean(summary['invalid_rate'] for summary in summaries),
+        'family_count': count,
+        'clustered': True,
     }
 
 

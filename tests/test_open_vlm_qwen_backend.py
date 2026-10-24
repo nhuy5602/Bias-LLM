@@ -20,6 +20,9 @@ class FakeQwenModel:
         value = values[candidate]
         return value if isinstance(value, list) else [value]
 
+    def score_image_batch(self, image, candidates):
+        return {candidate: self.score_image(image, candidate) for candidate in candidates}
+
 
 class OpenVlmQwenBackendTests(unittest.TestCase):
     def backend(self):
@@ -58,6 +61,14 @@ class OpenVlmQwenBackendTests(unittest.TestCase):
         self.assertEqual(result['prediction'], '13')
         self.assertEqual(result['forward_passes'], 1)
         self.assertEqual(result['image_token_count'], 8)
+        self.assertEqual(result['forward_passes'], 1)
+
+    def test_candidate_scoring_uses_one_batched_forward_pass(self):
+        backend = self.backend()
+        image = {'image_tokens': 8, 'scores': {'13': [-0.1, -0.1], '4': [-0.6]}}
+        result = backend.run({'image': image, 'candidates': ['13', '4']}, 'candidate_scoring')
+        self.assertEqual(result['forward_passes'], 1)
+        self.assertEqual(result['score_trace']['candidate_token_counts'], {'13': 2, '4': 1})
 
     def test_prior_contrastive_requires_equal_image_token_counts(self):
         backend = self.backend()
@@ -68,6 +79,7 @@ class OpenVlmQwenBackendTests(unittest.TestCase):
         self.assertEqual(result['forward_passes'], 2)
         self.assertEqual(result['image_token_count'], 8)
         self.assertEqual(result['alpha'], 1.0)
+        self.assertEqual(result['formula'], 'clear_minus_alpha_prior')
         with self.assertRaisesRegex(ValueError, 'image-token count'):
             backend.score_image_pair(clear, {**prior, 'image_tokens': 16}, ['4', '5'], alpha=1.0)
 
@@ -79,6 +91,14 @@ class OpenVlmQwenBackendTests(unittest.TestCase):
         self.assertAlmostEqual(result['scores']['4'], 0.0)
         self.assertAlmostEqual(result['scores']['5'], 1.0)
         self.assertEqual(result['prediction'], '5')
+
+    def test_normalized_contrastive_formula_is_explicit(self):
+        backend = self.backend()
+        clear = {'image_tokens': 8, 'scores': {'4': [-0.2], '5': [-0.8]}}
+        prior = {'image_tokens': 8, 'scores': {'4': [-0.1], '5': [-0.9]}}
+        result = backend.score_image_pair(clear, prior, ['4', '5'], alpha=2.0,
+                                          formula='normalized_vcd')
+        self.assertEqual(result['formula'], 'normalized_vcd')
 
     def test_free_generation_and_roi_methods_keep_method_metadata(self):
         backend = self.backend()

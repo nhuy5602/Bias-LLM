@@ -24,3 +24,12 @@ compatibility and model/dataset licenses remain target-image preflight gates.
 
 All summaries and fake runs retain `NEEDS_EVIDENCE`. No experiment result or
 causal mechanism claim is produced by this implementation slice.
+
+Follow-up review fixes completed on 2026-10-24: manifest rows are converted to
+backend tasks with materialized image variants; Step 0 checks blur bias
+alignment against a black control before alpha selection; candidate scoring
+uses a batched forward-pass contract with EOS-inclusive token traces; phase
+results and cost/attempt state are checkpointed; held-out evaluation requires a
+passed development gate and clustered family-weighted summaries; and cleanup
+stops a failed-upload pod while preserving its volume. GPU execution remains
+pending.

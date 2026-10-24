@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from open_vlm.diagnostics import (  # noqa: E402
     ALPHAS,
     SIGMAS,
     build_negative_controls,
+    materialize_image_variants,
     select_blur_sigma,
     validate_roi,
 )
@@ -21,15 +23,43 @@ class OpenVlmDiagnosticsTests(unittest.TestCase):
     def test_select_blur_sigma_uses_smallest_qualifying_value(self):
         records = [
             {'sigma': 1, 'subject_valid_rate': 1.0, 'invalid_rate': 0.01,
-             'clear_accuracy': 0.90, 'blur_accuracy': 0.86},
+             'clear_accuracy': 0.90, 'blur_accuracy': 0.86,
+             'blur_bias_rate': 0.70, 'black_bias_rate': 0.50},
             {'sigma': 3, 'subject_valid_rate': 0.95, 'invalid_rate': 0.01,
-             'clear_accuracy': 0.90, 'blur_accuracy': 0.75},
+             'clear_accuracy': 0.90, 'blur_accuracy': 0.75,
+             'blur_bias_rate': 0.70, 'black_bias_rate': 0.50},
             {'sigma': 6, 'subject_valid_rate': 0.99, 'invalid_rate': 0.01,
-             'clear_accuracy': 0.90, 'blur_accuracy': 0.60},
+             'clear_accuracy': 0.90, 'blur_accuracy': 0.60,
+             'blur_bias_rate': 0.70, 'black_bias_rate': 0.50},
         ]
         result = select_blur_sigma(records)
         self.assertEqual(result['status'], 'PASS')
         self.assertEqual(result['sigma'], 3)
+
+    def test_sigma_requires_bias_alignment_above_black_control(self):
+        records = [{
+            'sigma': 3,
+            'subject_valid_rate': 0.95,
+            'invalid_rate': 0.01,
+            'clear_accuracy': 0.90,
+            'blur_accuracy': 0.75,
+            'blur_bias_rate': 0.55,
+            'black_bias_rate': 0.50,
+        }]
+        self.assertEqual(select_blur_sigma(records)['status'], 'UNSUPPORTED')
+        records[0]['blur_bias_rate'] = 0.70
+        self.assertEqual(select_blur_sigma(records)['status'], 'PASS')
+
+    def test_materialize_variants_preserves_size_and_records_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            from PIL import Image
+            source = Path(directory) / 'source.png'
+            Image.new('RGB', (32, 24), (120, 80, 40)).save(source)
+            variants = materialize_image_variants(source, Path(directory) / 'derived', 3)
+            self.assertEqual(variants['size'], [32, 24])
+            self.assertTrue(Path(variants['blur_path']).is_file())
+            self.assertTrue(Path(variants['black_path']).is_file())
+            self.assertEqual(len(variants['source_sha256']), 64)
 
     def test_sigma_selection_rejects_no_qualifying_condition(self):
         records = [{

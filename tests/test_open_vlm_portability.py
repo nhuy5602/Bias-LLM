@@ -33,6 +33,9 @@ class OpenVlmPortabilityTests(unittest.TestCase):
         self.assertIn('trap cleanup EXIT', script)
         self.assertIn('OPEN_VLM_UPLOADER', script)
         self.assertIn('OPEN_VLM_DELETER', script)
+        self.assertIn('OPEN_VLM_STOPPER', script)
+        self.assertIn('OPEN_VLM_TIMEOUT_SECONDS', script)
+        self.assertIn('no-regression', script)
 
     def test_launcher_rejects_missing_arguments(self):
         bash = None

@@ -8,8 +8,10 @@ from open_vlm.scoring import (  # noqa: E402
     classify_answer,
     cluster_bootstrap_delta,
     evaluate_gate,
+    parse_free_generation,
     score_candidates,
     summarize,
+    summarize_clustered,
 )
 
 
@@ -29,6 +31,11 @@ class OpenVlmScoringTests(unittest.TestCase):
     def test_candidate_scoring_supports_single_float_scores(self):
         result = score_candidates(['yes', 'no'], lambda candidate: 1.0 if candidate == 'yes' else 0.5)
         self.assertEqual(result['prediction'], 'yes')
+
+    def test_free_generation_requires_exact_registered_answer(self):
+        self.assertEqual(parse_free_generation('13', ['0', '13', '20']), '13')
+        self.assertIsNone(parse_free_generation('There are 13 objects.', ['0', '13', '20']))
+        self.assertIsNone(parse_free_generation('13 objects', ['0', '13', '20']))
 
     def test_summary_reports_correct_bias_and_other_errors(self):
         rows = [
@@ -62,6 +69,16 @@ class OpenVlmScoringTests(unittest.TestCase):
         self.assertAlmostEqual(result['estimate'], 0.5)
         self.assertLessEqual(result['lower'], result['estimate'])
         self.assertGreaterEqual(result['upper'], result['estimate'])
+
+    def test_clustered_summary_weights_families_equally(self):
+        rows = [
+            {'domain': 'animals', 'family': 'a', 'prediction': 4, 'ground_truth': 4, 'prior_answer': 5},
+            {'domain': 'animals', 'family': 'a', 'prediction': 4, 'ground_truth': 4, 'prior_answer': 5},
+            {'domain': 'animals', 'family': 'b', 'prediction': 5, 'ground_truth': 4, 'prior_answer': 5},
+        ]
+        result = summarize_clustered(rows)
+        self.assertAlmostEqual(result['accuracy'], 0.5)
+        self.assertAlmostEqual(result['bias_rate'], 0.5)
 
     def test_development_gate_uses_bias_accuracy_and_invalid_rate(self):
         baseline = {'accuracy': 0.50, 'bias_rate': 0.50, 'other_error_rate': 0.0}

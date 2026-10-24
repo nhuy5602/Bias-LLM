@@ -3,7 +3,7 @@
 import math
 from pathlib import Path
 
-from .scoring import score_candidates
+from .scoring import parse_free_generation, score_candidates
 
 
 class QwenBackend:
@@ -103,6 +103,68 @@ class QwenBackend:
             return scorer(image, candidate)
         return self._score_hf_image(image, candidate)
 
+    def _score_candidates(self, image, candidates):
+        if isinstance(image, dict) and hasattr(self.model, 'score_image_batch'):
+            scores = self.model.score_image_batch(image, candidates)
+            return scores, {
+                'candidate_token_counts': {
+                    candidate: len(scores[candidate]) if isinstance(scores[candidate], (list, tuple)) else 1
+                    for candidate in candidates
+                },
+                'forward_passes': 1,
+            }
+        if isinstance(image, dict):
+            scores = {candidate: self._score_image(image, candidate) for candidate in candidates}
+            return scores, {
+                'candidate_token_counts': {
+                    candidate: len(scores[candidate]) if isinstance(scores[candidate], (list, tuple)) else 1
+                    for candidate in candidates
+                },
+                'forward_passes': 1,
+            }
+        return self._score_hf_candidates(image, candidates)
+
+    def _candidate_token_ids(self, candidate):
+        token_ids = list(self.processor.tokenizer(
+            candidate, add_special_tokens=False).input_ids)
+        eos = getattr(self.processor.tokenizer, 'eos_token_id', None)
+        if eos is not None and (not token_ids or token_ids[-1] != eos):
+            token_ids.append(eos)
+        return token_ids
+
+    def _score_hf_candidates(self, image, candidates):
+        inputs, _ = self._prepare_hf(image)
+        import torch
+        candidate_ids = [self._candidate_token_ids(candidate) for candidate in candidates]
+        max_candidate = max(len(ids) for ids in candidate_ids)
+        base_ids = inputs.input_ids
+        prompt_length = base_ids.shape[1]
+        pad_id = getattr(self.processor.tokenizer, 'pad_token_id', 0) or 0
+        padded = [ids + [pad_id] * (max_candidate - len(ids)) for ids in candidate_ids]
+        candidate_tensor = torch.tensor(padded, device=self.runtime['device'], dtype=base_ids.dtype)
+        full_ids = torch.cat([base_ids.repeat(len(candidates), 1), candidate_tensor], dim=1)
+        attention = torch.ones_like(full_ids)
+        model_inputs = {}
+        for key, value in inputs.items():
+            if key in {'input_ids', 'attention_mask'}:
+                continue
+            if hasattr(value, 'repeat_interleave') and getattr(value, 'shape', (1,))[0] == 1:
+                model_inputs[key] = value.repeat_interleave(len(candidates), dim=0)
+            else:
+                model_inputs[key] = value
+        model_inputs.update({'input_ids': full_ids, 'attention_mask': attention})
+        with torch.no_grad():
+            logits = self.model(**model_inputs).logits
+        log_probs = torch.log_softmax(logits, dim=-1)
+        scores = {}
+        token_counts = {}
+        for index, (candidate, ids) in enumerate(zip(candidates, candidate_ids)):
+            values = [float(log_probs[index, prompt_length - 1 + offset, token_id])
+                      for offset, token_id in enumerate(ids)]
+            scores[candidate] = values
+            token_counts[candidate] = len(ids)
+        return scores, {'candidate_token_counts': token_counts, 'forward_passes': 1}
+
     def _generate(self, image, prompt):
         if isinstance(image, dict):
             generator = getattr(self.model, 'generate', None)
@@ -131,17 +193,29 @@ class QwenBackend:
             token_scores.append(float(log_probs[prompt_length - 1 + offset, token_id]))
         return token_scores
 
-    def score_image_pair(self, clear, prior, candidates, alpha):
+    def score_image_pair(self, clear, prior, candidates, alpha, formula='clear_minus_alpha_prior'):
         clear_tokens = self._resolve_image_token_count(clear)
         prior_tokens = self._resolve_image_token_count(prior)
         if clear_tokens != prior_tokens:
             raise ValueError('clear/prior image-token count must match')
-        clear_scores = score_candidates(candidates, lambda candidate: self._score_image(clear, candidate))['scores']
-        prior_scores = score_candidates(candidates, lambda candidate: self._score_image(prior, candidate))['scores']
-        contrastive_scores = {
-            candidate: clear_scores[candidate] - float(alpha) * prior_scores[candidate]
-            for candidate in candidates
-        }
+        clear_raw, clear_trace = self._score_candidates(clear, candidates)
+        prior_raw, prior_trace = self._score_candidates(prior, candidates)
+        clear_scores = {candidate: sum(float(value) for value in (values if isinstance(values, (list, tuple)) else [values]))
+                        for candidate, values in clear_raw.items()}
+        prior_scores = {candidate: sum(float(value) for value in (values if isinstance(values, (list, tuple)) else [values]))
+                        for candidate, values in prior_raw.items()}
+        if formula == 'normalized_vcd':
+            contrastive_scores = {
+                candidate: (1.0 + float(alpha)) * clear_scores[candidate] - float(alpha) * prior_scores[candidate]
+                for candidate in candidates
+            }
+        elif formula == 'clear_minus_alpha_prior':
+            contrastive_scores = {
+                candidate: clear_scores[candidate] - float(alpha) * prior_scores[candidate]
+                for candidate in candidates
+            }
+        else:
+            raise ValueError(f'Unsupported contrastive formula: {formula}')
         prediction = max(enumerate(candidates), key=lambda item: (contrastive_scores[item[1]], -item[0]))[1]
         return {
             'prediction': prediction,
@@ -149,7 +223,9 @@ class QwenBackend:
             'clear_scores': clear_scores,
             'prior_scores': prior_scores,
             'alpha': float(alpha),
-            'forward_passes': 2,
+            'formula': formula,
+            'forward_passes': clear_trace['forward_passes'] + prior_trace['forward_passes'],
+            'score_trace': {'clear': clear_trace, 'prior': prior_trace},
             'image_token_count': clear_tokens,
         }
 
@@ -159,26 +235,33 @@ class QwenBackend:
         self._active_prompt = prompt
         try:
             if method == 'free_generation':
+                raw = self._generate(task['image'], prompt)
+                prediction = parse_free_generation(raw, candidates) if candidates else raw
                 return {
                     'method': method,
-                    'prediction': self._generate(task['image'], prompt),
+                    'prediction': prediction,
+                    'raw': raw,
                     'forward_passes': 1,
                     'image_token_count': self._resolve_image_token_count(task['image']),
                 }
             if method == 'candidate_scoring':
-                result = score_candidates(candidates, lambda candidate: self._score_image(task['image'], candidate))
-                return {**result, 'method': method, 'forward_passes': 1,
+                raw_scores, trace = self._score_candidates(task['image'], candidates)
+                result = score_candidates(candidates, lambda candidate: raw_scores[candidate])
+                return {**result, 'method': method, 'forward_passes': trace['forward_passes'],
+                        'score_trace': trace,
                         'image_token_count': self._resolve_image_token_count(task['image'])}
-            if method == 'prior_contrastive':
+            if method in {'prior_contrastive', 'prior_contrastive_control'}:
                 return {**self.score_image_pair(task['image'], task['prior_image'], candidates,
-                                                task['alpha']), 'method': method}
+                                                task['alpha'], task.get('formula', 'clear_minus_alpha_prior')),
+                        'method': method}
             if method in {'oracle_roi', 'automatic_roi'}:
                 roi_image = task.get('roi_image')
                 if roi_image is None:
                     raise ValueError(f'{method} requires roi_image')
-                result = score_candidates(candidates, lambda candidate: self._score_image(roi_image, candidate))
+                raw_scores, trace = self._score_candidates(roi_image, candidates)
+                result = score_candidates(candidates, lambda candidate: raw_scores[candidate])
                 return {**result, 'method': method, 'roi_kind': method,
-                        'forward_passes': 1,
+                        'forward_passes': trace['forward_passes'], 'score_trace': trace,
                         'image_token_count': self._resolve_image_token_count(roi_image)}
             raise ValueError(f'Unsupported Qwen method: {method}')
         finally:

@@ -3,6 +3,7 @@
 from collections import defaultdict
 from dataclasses import dataclass
 import copy
+import json
 import random
 from pathlib import Path
 
@@ -87,7 +88,7 @@ def validate_row(row: dict, domain: DomainSpec) -> dict:
     normalized.update({
         'domain': domain.name,
         'family': family,
-        'image_path': Path(image_path).as_posix(),
+        'image_path': image_path.replace('\\', '/'),
         'answer_kind': domain.answer_kind,
         'candidate_values': [_normalize_candidate(v, domain.answer_kind)
                              for v in domain.candidate_values],
@@ -112,7 +113,11 @@ def split_families(rows: list[dict], seed: int, dev_fraction: float = 0.8) -> di
         grouped[family].append(row)
     families = sorted(grouped)
     random.Random(seed).shuffle(families)
-    dev_count = max(1, min(len(families) - 1, int(len(families) * dev_fraction))) if len(families) > 1 else len(families)
+    if len(families) >= 5:
+        test_count = max(2, int(round(len(families) * (1 - dev_fraction))))
+        dev_count = len(families) - test_count
+    else:
+        dev_count = max(1, min(len(families) - 1, int(len(families) * dev_fraction))) if len(families) > 1 else len(families)
     dev_families = set(families[:dev_count])
     dev = sorted((row for family, group in grouped.items() if family in dev_families for row in group), key=_row_key)
     same_domain_test = sorted((row for family, group in grouped.items() if family not in dev_families for row in group), key=_row_key)
@@ -136,6 +141,12 @@ def build_manifest(rows, config):
             raise ValueError(f'No verified domain contract for {domain_name}')
         normalized.append(validate_row(row, specs[domain_name]))
 
+    extra_sets = {}
+    for name in ('original_rows', 'sanity_rows'):
+        extra_rows = config.get(name)
+        if extra_rows is not None:
+            extra_sets[name] = [validate_row(row, specs[row.get('domain')]) for row in extra_rows]
+
     seed = int(config.get('seed', 0))
     family_split = {}
     for domain_name in sorted({row['domain'] for row in normalized}):
@@ -153,13 +164,22 @@ def build_manifest(rows, config):
         'protocol': 'open-vlm-v1',
         'dataset': config.get('dataset', DEFAULT_DATASET),
         'dataset_revision': DATASET_REVISION,
+        'source_root': str(config.get('source_root', '')).replace('\\', '/'),
         'license_attestations': attestations,
         'seed': seed,
         'processor': config.get('processor', {}),
         'model': config.get('model', {}),
         'runtime': config.get('runtime', {}),
-        'method': config.get('method', {}),
+        'method': {
+            'sigmas': [1, 3, 6, 12],
+            'alphas': [0.25, 0.5, 1.0, 2.0],
+            'contrastive_formula': 'clear_minus_alpha_prior',
+            'contrastive_formula_rationale': 'Preserves the clear-image score scale; normalized_vcd is a secondary ablation.',
+            **config.get('method', {}),
+        },
+        'step0_records': config.get('step0_records'),
         'family_split': family_split,
         'rows': sorted(normalized, key=_row_key),
         'scientific_status': SCIENTIFIC_STATUS,
+        **extra_sets,
     }

@@ -1,7 +1,7 @@
 # Open-VLM Visual-Prior Mitigation - Design Spec
 
 Date: 2026-10-21
-Status: proposed - awaiting implementation approval
+Status: implemented scaffold - GPU execution pending
 Scope: a new `open-vlm` experiment track; existing black-box pilots and
 `run-collab.ps1` remain unchanged.
 
@@ -26,6 +26,11 @@ The VLMBias dataset revision is pinned to
 `3761f9fd7163577534a7816c8bc1004035f2e2a0`. A preflight must record and pass
 the dataset and model licenses before any paid launch.
 
+The registered primary contrastive formula is `clear - alpha * prior`, chosen
+to preserve the clear-image score scale. The normalized VCD-style formula
+`(1 + alpha) * clear - alpha * prior` is an explicit secondary ablation, not a
+silent substitution.
+
 ## 2. Required scientific gates
 
 ### Step 0: validate the blur-as-prior assumption
@@ -43,10 +48,12 @@ sigma values `[1, 3, 6, 12]` (sigma 12 is the heavy condition). Record:
 
 The selected sigma is the smallest value satisfying all of these preregistered
 development rules: subject-validity rate at least 90%, invalid output rate at
-most 5%, and blur detail accuracy at least 10 percentage points below the clear
-condition. If more than one value qualifies, choose the smallest. If none
-qualifies, contrastive decoding is marked unsupported for that model/condition
-rather than tuned around the failure.
+most 5%, blur detail accuracy at least 10 percentage points below the clear
+condition, blur bias-aligned rate at least 50%, and blur bias-aligned rate at
+least 10 points above the empty/black-image control. If more than one value
+qualifies, choose the smallest. If none qualifies, contrastive decoding is
+marked unsupported for that model/condition rather than tuned around the
+failure.
 
 ### Domain split
 
@@ -151,7 +158,8 @@ derived resolutions are never treated as independent samples. The first
 registration uses these concrete values unless changed before execution:
 
 - development continuation requires at least a 5 percentage-point bias-rate
-  reduction, point-estimate accuracy no lower than 5 points, other-error rate
+  reduction, point-estimate accuracy no lower than baseline minus 5 points,
+  other-error rate
   no higher than 5 points, and invalid output rate at most 5%; otherwise stop
   the primary method and redirect remaining budget to the attention/logit-lens
   diagnostic slice;

@@ -7,10 +7,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 from open_vlm.runner import (  # noqa: E402
+    build_backend_task,
     prepare_run,
     run_development,
     run_held_out,
     run_no_regression,
+    run_step0,
     run_smoke,
     safe_upload_then_delete,
 )
@@ -53,6 +55,14 @@ class FakeBackend:
         }
 
 
+class Step0Backend(FakeBackend):
+    def run(self, task, method):
+        self.calls.append((task['task_id'], method))
+        condition = task.get('condition')
+        prediction = {'clear': 4, 'blur': 5, 'black': 4}.get(condition, 4)
+        return {'prediction': prediction, 'forward_passes': 1, 'seconds': 0.01}
+
+
 class OpenVlmRunnerTests(unittest.TestCase):
     def config(self):
         return {
@@ -71,6 +81,13 @@ class OpenVlmRunnerTests(unittest.TestCase):
             self.assertEqual(state['status'], 'PREPARED')
             self.assertEqual(state['calls'], 0)
 
+    def test_backend_task_maps_manifest_fields_and_candidate_values(self):
+        row = manifest_rows(1)[0]
+        task = build_backend_task(row, sigma=3, alpha=1.0)
+        self.assertEqual(task['candidates'], [str(value) for value in range(21)])
+        self.assertEqual(task['alpha'], 1.0)
+        self.assertIn('image_path', task)
+
     def test_smoke_limits_to_50_and_does_not_make_scientific_decision(self):
         backend = FakeBackend()
         result = run_smoke({'rows': manifest_rows(), 'scientific_status': 'NEEDS_EVIDENCE'}, backend, limit=50)
@@ -85,6 +102,18 @@ class OpenVlmRunnerTests(unittest.TestCase):
         self.assertEqual(result['calls'], 0)
         self.assertEqual(backend.calls, [])
 
+    def test_smoke_checkpoints_results_and_state_when_run_dir_is_present(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = prepare_run(Path(directory), 'smoke', manifest_rows(2), self.config())
+            manifest = json.loads((run_dir / 'manifest.json').read_text(encoding='utf-8'))
+            result = run_smoke(manifest, FakeBackend(), limit=2)
+            self.assertEqual(result['status'], 'COMPLETED')
+            self.assertTrue((run_dir / 'results' / 'candidate_scoring.json').is_file())
+            self.assertTrue((run_dir / 'results' / 'smoke-summary.json').is_file())
+            state = json.loads((run_dir / 'state.json').read_text(encoding='utf-8'))
+            self.assertEqual(state['calls'], 2)
+            self.assertEqual(state['phase_status'], 'COMPLETED')
+
     def test_retry_is_recorded_and_successful_task_is_not_replayed(self):
         backend = FakeBackend(fail_once=True)
         result = run_smoke({'rows': manifest_rows(1), 'scientific_status': 'NEEDS_EVIDENCE'}, backend, max_retries=1)
@@ -97,7 +126,11 @@ class OpenVlmRunnerTests(unittest.TestCase):
         backend = FakeBackend(method_predictions={
             'free_generation': 5, 'candidate_scoring': 5, 'prior_contrastive': 7,
         })
-        result = run_development({'rows': rows, 'scientific_status': 'NEEDS_EVIDENCE'}, backend)
+        result = run_development({'rows': rows, 'scientific_status': 'NEEDS_EVIDENCE',
+                                  'step0_records': [{'sigma': 3, 'subject_valid_rate': 1.0,
+                                                     'invalid_rate': 0.0, 'clear_accuracy': 1.0,
+                                                     'blur_accuracy': 0.0, 'blur_bias_rate': 1.0,
+                                                     'black_bias_rate': 0.0}]}, backend)
         self.assertEqual(result['status'], 'BUDGET_STOPPED')
         self.assertEqual(result['next_action'], 'attention_logit_lens')
 
@@ -106,11 +139,22 @@ class OpenVlmRunnerTests(unittest.TestCase):
         backend = FakeBackend(method_predictions={
             'free_generation': 4, 'candidate_scoring': 5, 'prior_contrastive': 4,
         })
-        result = run_development({'rows': rows, 'scientific_status': 'NEEDS_EVIDENCE'}, backend)
+        result = run_development({'rows': rows, 'scientific_status': 'NEEDS_EVIDENCE',
+                                  'step0_records': [{'sigma': 3, 'subject_valid_rate': 1.0,
+                                                     'invalid_rate': 0.0, 'clear_accuracy': 1.0,
+                                                     'blur_accuracy': 0.0, 'blur_bias_rate': 1.0,
+                                                     'black_bias_rate': 0.0}]}, backend)
         self.assertEqual(result['status'], 'PASS')
         self.assertEqual(result['baseline_candidate']['accuracy'], 0.0)
         self.assertEqual(result['method']['accuracy'], 1.0)
         self.assertIn(('task-000', 'candidate_scoring'), backend.calls)
+
+    def test_step0_selects_blur_sigma_using_black_control(self):
+        rows = manifest_rows(2)
+        result = run_step0({'rows': rows}, Step0Backend())
+        self.assertEqual(result['status'], 'PASS')
+        self.assertEqual(result['selected_sigma'], 1)
+        self.assertEqual(result['records'][0]['blur_bias_rate'], 1.0)
 
     def test_development_uses_only_registered_dev_families(self):
         rows = manifest_rows(10)
@@ -122,12 +166,17 @@ class OpenVlmRunnerTests(unittest.TestCase):
                 'animals': {'dev_families': ['animals-000']},
                 'logos': {'dev_families': ['logos-001']},
             },
+            'step0_records': [{'sigma': 3, 'subject_valid_rate': 1.0,
+                               'invalid_rate': 0.0, 'clear_accuracy': 1.0,
+                               'blur_accuracy': 0.0, 'blur_bias_rate': 1.0,
+                               'black_bias_rate': 0.0}],
         }
         backend = FakeBackend(method_predictions={
             'free_generation': 5, 'candidate_scoring': 5, 'prior_contrastive': 4,
         })
         run_development(manifest, backend)
-        called_ids = {task_id for task_id, _method in backend.calls}
+        called_ids = {task_id for task_id, _method in backend.calls
+                      if '-sigma' not in task_id and '-alpha' not in task_id}
         self.assertEqual(called_ids, {'animals-000', 'logos-001'})
 
     def test_held_out_returns_clustered_primary_gate(self):
@@ -143,7 +192,8 @@ class OpenVlmRunnerTests(unittest.TestCase):
         backend = FakeBackend(method_predictions={
             'free_generation': 4, 'candidate_scoring': 5, 'prior_contrastive': 4,
         })
-        result = run_held_out({'rows': rows, 'scientific_status': 'NEEDS_EVIDENCE'}, backend)
+        result = run_held_out({'rows': rows, 'scientific_status': 'NEEDS_EVIDENCE',
+                               'development_status': 'PASS'}, backend)
         self.assertEqual(result['status'], 'PASS')
         self.assertEqual(result['baseline_candidate']['accuracy'], 0.0)
         self.assertEqual(result['gate']['status'], 'PASS')
@@ -164,6 +214,19 @@ class OpenVlmRunnerTests(unittest.TestCase):
             result = safe_upload_then_delete('pod-1', artifact_dir, 'remote', uploader, deleted.append)
             self.assertEqual(result['status'], 'CLEANUP_BLOCKED')
             self.assertEqual(deleted, [])
+
+    def test_upload_failure_stops_pod_but_preserves_volume(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_dir = Path(directory)
+            stopped = []
+            result = safe_upload_then_delete(
+                'pod-1', artifact_dir, 'remote',
+                lambda *_args: (_ for _ in ()).throw(RuntimeError('remote unavailable')),
+                lambda pod_id, **kwargs: stopped.append((pod_id, kwargs)),
+                stopper=lambda pod_id, **kwargs: stopped.append((pod_id, kwargs)),
+            )
+            self.assertEqual(result['status'], 'STOPPED_CLEANUP_BLOCKED')
+            self.assertEqual(stopped, [('pod-1', {'preserve_volume': True})])
 
     def test_successful_upload_verifies_then_deletes_pod(self):
         with tempfile.TemporaryDirectory() as directory:
