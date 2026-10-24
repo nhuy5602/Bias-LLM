@@ -2,6 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
+import urllib.error
 from io import BytesIO
 from pathlib import Path
 
@@ -70,6 +71,29 @@ class OpenVlmDatasetTests(unittest.TestCase):
         self.assertEqual(len(urls), 1)
         self.assertIn(DATASET_REVISION, urls[0])
         self.assertTrue(urls[0].startswith(BASE_ROWS_URL))
+
+    def test_fetch_rows_retries_transient_gateway_errors(self):
+        attempts = []
+
+        def opener(request, timeout):
+            attempts.append(request.full_url)
+            if len(attempts) < 3:
+                raise urllib.error.HTTPError(request.full_url, 502, 'bad gateway', {}, None)
+            return Response(json.dumps({'rows': []}).encode('utf-8'))
+
+        fetch_rows(offsets=(0,), opener=opener, retries=3, backoff_seconds=0)
+        self.assertEqual(len(attempts), 3)
+
+    def test_fetch_rows_does_not_retry_not_found(self):
+        attempts = []
+
+        def opener(request, timeout):
+            attempts.append(request.full_url)
+            raise urllib.error.HTTPError(request.full_url, 404, 'not found', {}, None)
+
+        with self.assertRaises(urllib.error.HTTPError):
+            fetch_rows(offsets=(0,), opener=opener, retries=3, backoff_seconds=0)
+        self.assertEqual(len(attempts), 1)
 
     def test_load_rows_filters_domains_and_limits_per_domain(self):
         rows = [self.row('Animals'), self.row('Logos')]

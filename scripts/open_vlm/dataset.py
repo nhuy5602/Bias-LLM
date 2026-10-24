@@ -3,6 +3,8 @@
 import hashlib
 import json
 import re
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -36,8 +38,24 @@ def _json_response(response):
     return json.loads(data)
 
 
+def _open_with_retry(request, opener, retries=4, backoff_seconds=1.0):
+    transient = {429, 500, 502, 503, 504}
+    for attempt in range(retries + 1):
+        try:
+            return opener(request, timeout=60)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in transient or attempt >= retries:
+                raise
+            time.sleep(backoff_seconds * (2 ** attempt))
+        except urllib.error.URLError:
+            if attempt >= retries:
+                raise
+            time.sleep(backoff_seconds * (2 ** attempt))
+
+
 def fetch_rows(split='main', offsets=(0,), dataset=DEFAULT_DATASET,
-               revision=DATASET_REVISION, page_size=PAGE_SIZE, opener=None):
+               revision=DATASET_REVISION, page_size=PAGE_SIZE, opener=None,
+               retries=4, backoff_seconds=1.0):
     opener = opener or urllib.request.urlopen
     rows = []
     for offset in offsets:
@@ -53,7 +71,8 @@ def fetch_rows(split='main', offsets=(0,), dataset=DEFAULT_DATASET,
             f'{BASE_ROWS_URL}?{query}',
             headers={'User-Agent': 'visual-prior-bias-open-vlm/1'},
         )
-        with opener(request, timeout=60) as response:
+        with _open_with_retry(request, opener, retries=retries,
+                              backoff_seconds=backoff_seconds) as response:
             rows.extend(item['row'] for item in _json_response(response).get('rows', []))
     return rows
 

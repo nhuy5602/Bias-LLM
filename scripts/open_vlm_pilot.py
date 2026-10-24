@@ -67,6 +67,8 @@ def main(argv=None):
         from open_vlm.runner import run_no_regression
         result = run_no_regression(manifest, backend)
     print(json.dumps(result, indent=2, sort_keys=True))
+    if result.get('status') in {'SMOKE_FAILED', 'BUDGET_STOPPED', 'FAIL'}:
+        return 1
     return 0
 
 
