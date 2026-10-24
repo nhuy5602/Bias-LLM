@@ -11,6 +11,7 @@ HELD_OUT_BIAS_DELTA = 0.10
 MAX_ACCURACY_DROP = 0.05
 MAX_OTHER_ERROR_INCREASE = 0.05
 MAX_INVALID_RATE = 0.05
+MIN_CONTROL_MARGIN = 0.05
 LABELS = ('Correct', 'Bias-aligned', 'Other errors')
 
 
@@ -178,6 +179,8 @@ def evaluate_gate(baseline, method, development: bool) -> dict:
     if development:
         if other_error_delta > MAX_OTHER_ERROR_INCREASE:
             result['reasons'].append('other-error increase exceeds 5 points')
+        if method.get('control_margin') is not None and method['control_margin'] < MIN_CONTROL_MARGIN:
+            result['reasons'].append('primary improvement does not beat controls by 5 points')
         result['status'] = 'FAIL' if result['reasons'] else 'PASS'
         return result
 

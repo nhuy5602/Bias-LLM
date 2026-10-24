@@ -15,6 +15,7 @@ MIN_DETAIL_DROP = 0.10
 RANDOM_ALPHA_DRAWS = 20
 MIN_BIAS_ALIGNMENT = 0.50
 MIN_BIAS_LIFT_OVER_BLACK = 0.10
+MAX_BLACK_SUBJECT_VALIDITY = 0.20
 
 
 def select_blur_sigma(records) -> dict:
@@ -26,7 +27,8 @@ def select_blur_sigma(records) -> dict:
                 and detail_drop >= MIN_DETAIL_DROP
                 and record.get('blur_bias_rate', 0.0) >= MIN_BIAS_ALIGNMENT
                 and record.get('blur_bias_rate', 0.0) - record.get('black_bias_rate', 0.0)
-                >= MIN_BIAS_LIFT_OVER_BLACK):
+                >= MIN_BIAS_LIFT_OVER_BLACK
+                and record.get('black_subject_valid_rate', 0.0) <= MAX_BLACK_SUBJECT_VALIDITY):
             return {
                 'status': 'PASS',
                 'sigma': record['sigma'],
@@ -35,6 +37,7 @@ def select_blur_sigma(records) -> dict:
                 'detail_drop': detail_drop,
                 'blur_bias_rate': record.get('blur_bias_rate', 0.0),
                 'black_bias_rate': record.get('black_bias_rate', 0.0),
+                'black_subject_valid_rate': record.get('black_subject_valid_rate', 0.0),
             }
         reasons.append({
             'sigma': record['sigma'],
@@ -43,6 +46,7 @@ def select_blur_sigma(records) -> dict:
             'detail_drop': detail_drop,
             'blur_bias_rate': record.get('blur_bias_rate', 0.0),
             'black_bias_rate': record.get('black_bias_rate', 0.0),
+            'black_subject_valid_rate': record.get('black_subject_valid_rate', 0.0),
         })
     return {'status': 'UNSUPPORTED', 'sigma': None, 'reasons': reasons}
 
@@ -55,19 +59,32 @@ def materialize_image_variants(source_path, output_dir, sigma, seed=0):
     source_path = Path(source_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    source_sha256 = _sha256(source_path)
+    stem = f'{source_path.stem}-{source_sha256[:12]}'
+    blur_path = output_dir / f'{stem}-blur-sigma{sigma}.png'
+    black_path = output_dir / f'{stem}-black.png'
+    noise_path = output_dir / f'{stem}-noise-seed{seed}.png'
+    shuffled_path = output_dir / f'{stem}-shuffled.png'
+    if all(path.is_file() for path in (blur_path, black_path, noise_path, shuffled_path)):
+        with Image.open(source_path) as opened:
+            size = list(opened.size)
+        sigma_pixels = float(sigma) * min(size) / 384.0
+        return {
+            'source_path': str(source_path), 'blur_path': str(blur_path),
+            'black_path': str(black_path), 'noise_path': str(noise_path),
+            'shuffled_prior_path': str(shuffled_path), 'size': size,
+            'source_sha256': source_sha256, 'blur_sha256': _sha256(blur_path),
+            'black_sha256': _sha256(black_path), 'noise_sha256': _sha256(noise_path),
+            'shuffled_prior_sha256': _sha256(shuffled_path), 'sigma': sigma,
+            'sigma_pixels': sigma_pixels,
+        }
     with Image.open(source_path) as opened:
         image = opened.convert('RGB')
         size = list(image.size)
-        blur_path = output_dir / f'{source_path.stem}-blur-sigma{sigma}.png'
-        black_path = output_dir / f'{source_path.stem}-black.png'
-        noise_path = output_dir / f'{source_path.stem}-noise-seed{seed}.png'
-        shuffled_path = output_dir / f'{source_path.stem}-shuffled.png'
-        image.filter(ImageFilter.GaussianBlur(float(sigma))).save(blur_path, format='PNG', optimize=False)
+        sigma_pixels = float(sigma) * min(size) / 384.0
+        image.filter(ImageFilter.GaussianBlur(sigma_pixels)).save(blur_path, format='PNG', optimize=False)
         Image.new('RGB', image.size, (0, 0, 0)).save(black_path, format='PNG', optimize=False)
-        rng = random.Random(seed)
-        noise = Image.new('RGB', image.size)
-        noise.putdata([(rng.randrange(256), rng.randrange(256), rng.randrange(256))
-                       for _ in range(image.width * image.height)])
+        noise = Image.effect_noise(image.size, 127).convert('RGB')
         noise.save(noise_path, format='PNG', optimize=False)
         image.transpose(Image.Transpose.FLIP_LEFT_RIGHT).save(shuffled_path, format='PNG', optimize=False)
     return {
@@ -77,12 +94,13 @@ def materialize_image_variants(source_path, output_dir, sigma, seed=0):
         'noise_path': str(noise_path),
         'shuffled_prior_path': str(shuffled_path),
         'size': size,
-        'source_sha256': _sha256(source_path),
+        'source_sha256': source_sha256,
         'blur_sha256': _sha256(blur_path),
         'black_sha256': _sha256(black_path),
         'noise_sha256': _sha256(noise_path),
         'shuffled_prior_sha256': _sha256(shuffled_path),
         'sigma': sigma,
+        'sigma_pixels': sigma_pixels,
     }
 
 

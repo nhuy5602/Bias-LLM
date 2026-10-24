@@ -46,8 +46,9 @@ class FakeBackend:
         if self.fail_once and task['task_id'] not in self.failed:
             self.failed.add(task['task_id'])
             raise RuntimeError('transient backend error')
+        fallback = 5 if method == 'self_consistency' else 4
         return {
-            'prediction': self.method_predictions.get(method, 4),
+            'prediction': self.method_predictions.get(method, fallback),
             'score_trace': {'method': method},
             'forward_passes': 2 if method == 'prior_contrastive' else 1,
             'seconds': 0.01,
@@ -55,11 +56,19 @@ class FakeBackend:
         }
 
 
+class CostBackend(FakeBackend):
+    def run(self, task, method):
+        result = super().run(task, method)
+        result['cost_usd'] = 1.0
+        return result
+
+
 class Step0Backend(FakeBackend):
     def run(self, task, method):
         self.calls.append((task['task_id'], method))
         if method == 'subject_validity':
-            return {'prediction': 'yes', 'forward_passes': 1, 'seconds': 0.01}
+            return {'prediction': 'no' if task.get('condition') == 'black' else 'yes',
+                    'forward_passes': 1, 'seconds': 0.01}
         condition = task.get('condition')
         prediction = {'clear': 4, 'blur': 5, 'black': 4}.get(condition, 4)
         return {'prediction': prediction, 'forward_passes': 1, 'seconds': 0.01}
@@ -110,11 +119,22 @@ class OpenVlmRunnerTests(unittest.TestCase):
             manifest = json.loads((run_dir / 'manifest.json').read_text(encoding='utf-8'))
             result = run_smoke(manifest, FakeBackend(), limit=2)
             self.assertEqual(result['status'], 'COMPLETED')
-            self.assertTrue((run_dir / 'results' / 'candidate_scoring.json').is_file())
+            self.assertTrue((run_dir / 'results' / 'candidate_scoring.jsonl').is_file())
             self.assertTrue((run_dir / 'results' / 'smoke-summary.json').is_file())
             state = json.loads((run_dir / 'state.json').read_text(encoding='utf-8'))
             self.assertEqual(state['calls'], 2)
             self.assertEqual(state['phase_status'], 'COMPLETED')
+
+    def test_budget_ceiling_stops_after_cost_is_recorded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = {**self.config(), 'budget_usd': 0.5}
+            run_dir = prepare_run(Path(directory), 'smoke', manifest_rows(2), config)
+            manifest = json.loads((run_dir / 'manifest.json').read_text(encoding='utf-8'))
+            result = run_smoke(manifest, CostBackend(), limit=2)
+            self.assertEqual(result['status'], 'SMOKE_FAILED')
+            state = json.loads((run_dir / 'state.json').read_text(encoding='utf-8'))
+            self.assertEqual(state['status'], 'BUDGET_STOPPED')
+            self.assertGreater(state['cost_usd'], 0.5)
 
     def test_retry_is_recorded_and_successful_task_is_not_replayed(self):
         backend = FakeBackend(fail_once=True)

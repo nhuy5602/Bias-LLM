@@ -128,6 +128,18 @@ class OpenVlmQwenBackendTests(unittest.TestCase):
         self.assertEqual(result['forward_passes'], 2)
         self.assertEqual(len(result['raw_samples']), 2)
 
+    def test_runtime_metrics_and_cost_are_recorded(self):
+        backend = QwenBackend(
+            model=FakeQwenModel(), processor=None,
+            manifest={'runtime': {'gpu_cost_usd_per_hour': 3600.0}},
+        )
+        result = backend.run({'image': {'image_tokens': 8, 'scores': {'4': [-0.1]}},
+                              'candidates': ['4']}, 'candidate_scoring')
+        self.assertIn('seconds', result)
+        self.assertIn('peak_memory_mb', result)
+        self.assertIn('cost_usd', result)
+        self.assertGreaterEqual(result['cost_usd'], 0.0)
+
 
 if __name__ == '__main__':
     unittest.main()

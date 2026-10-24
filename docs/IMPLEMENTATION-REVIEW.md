@@ -33,3 +33,8 @@ results and cost/attempt state are checkpointed; held-out evaluation requires a
 passed development gate and clustered family-weighted summaries; and cleanup
 stops a failed-upload pod while preserving its volume. GPU execution remains
 pending.
+
+The preparation path is now executable from `open_vlm_pilot.py --prepare`:
+it fetches the pinned Hugging Face rows, filters explicit prior-answer rows,
+downloads images into the run folder, records SHA256/source-family metadata,
+and blocks phase execution while license attestations are pending.

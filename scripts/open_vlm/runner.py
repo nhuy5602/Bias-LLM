@@ -85,7 +85,7 @@ def _write_json(path, value):
 
 def _checkpoint_task(artifact_dir, method, result, attempts, failures):
     if artifact_dir is None:
-        return
+        return True
     task_id = result.get('task_id', 'unknown')
     attempt = result.get('attempt', attempts)
     task_dir = artifact_dir / 'logs' / method / task_id / str(attempt)
@@ -93,10 +93,10 @@ def _checkpoint_task(artifact_dir, method, result, attempts, failures):
     raw = result.get('raw')
     if raw is not None:
         (task_dir / 'raw.txt').write_text(str(raw), encoding='utf-8')
-    results_path = artifact_dir / 'results' / f'{method}.json'
-    existing = json.loads(results_path.read_text(encoding='utf-8')) if results_path.is_file() else []
-    existing.append(result)
-    _write_json(results_path, existing)
+    results_path = artifact_dir / 'results' / f'{method}.jsonl'
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    with results_path.open('a', encoding='utf-8', newline='\n') as stream:
+        stream.write(json.dumps(result, sort_keys=True, ensure_ascii=True, default=str) + '\n')
     state_path = artifact_dir / 'state.json'
     state = json.loads(state_path.read_text(encoding='utf-8')) if state_path.is_file() else {}
     state.update({
@@ -109,7 +109,12 @@ def _checkpoint_task(artifact_dir, method, result, attempts, failures):
         'last_task_id': task_id,
         'failure_count': int(state.get('failure_count', 0)) + (1 if result.get('error') else 0),
     })
+    budget = state.get('budget_usd')
+    if budget is not None and state['cost_usd'] > float(budget):
+        state['status'] = 'BUDGET_STOPPED'
+        state['budget_exceeded'] = True
     _write_json(state_path, state)
+    return state.get('status') != 'BUDGET_STOPPED'
 
 
 def _run_tasks(rows, backend, method, limit=None, max_retries=0, dry_run=False,
@@ -122,6 +127,12 @@ def _run_tasks(rows, backend, method, limit=None, max_retries=0, dry_run=False,
     attempts = 0
     failures = []
     for index, row in enumerate(rows):
+        if artifact_dir is not None:
+            state_path = artifact_dir / 'state.json'
+            if state_path.is_file() and json.loads(state_path.read_text(encoding='utf-8')).get('status') == 'BUDGET_STOPPED':
+                failures.append({'task_id': row.get('task_id', f'task-{index:05}'),
+                                 'method': method, 'error': 'budget exceeded'})
+                break
         task = build_backend_task(row, sigma=sigma, alpha=alpha, artifact_dir=artifact_dir,
                                   condition=condition, source_root=source_root, formula=formula)
         task.setdefault('task_id', f'task-{index:05}')
@@ -136,7 +147,9 @@ def _run_tasks(rows, backend, method, limit=None, max_retries=0, dry_run=False,
                     'attempt': attempt,
                 }
                 results.append(result)
-                _checkpoint_task(artifact_dir, method, result, attempts, failures)
+                if not _checkpoint_task(artifact_dir, method, result, attempts, failures):
+                    failures.append({'task_id': task['task_id'], 'method': method, 'error': 'budget exceeded'})
+                    return results, attempts, failures
                 break
             except Exception as exc:
                 attempt_result = {**task, 'method': method, 'attempt': attempt,
@@ -171,6 +184,7 @@ def prepare_run(root, phase, rows, config) -> Path:
         'scientific_status': 'NEEDS_EVIDENCE',
         'cost_usd': 0.0,
         'forward_passes': 0,
+        'budget_usd': manifest.get('budget_usd'),
     }, indent=2), encoding='utf-8')
     return run_dir
 
@@ -258,29 +272,35 @@ def run_step0(manifest, backend, max_retries=0, dry_run=False) -> dict:
                 artifact_dir=artifact_dir, sigma=sigma, condition=condition,
                 source_root=source_root, formula=formula)
             condition_results[condition] = summarize_clustered(values)
-        subject_rows = [
-            {**row, 'candidate_values': ['yes', 'no'], 'ground_truth': 'yes',
-             'expected_bias': 'no', 'prompt': 'Is the target subject clearly visible? Answer yes or no.',
-             'task_id': f"{row.get('task_id', row.get('family', index))}-subject-sigma{sigma}"}
-            for index, row in enumerate(rows)
-        ]
-        subject_values, _, _ = _run_tasks(
-            subject_rows, backend, 'subject_validity', max_retries=max_retries,
-            artifact_dir=artifact_dir, sigma=sigma, condition='blur',
-            source_root=source_root, formula=formula)
-        subject_valid_rate = (sum(value.get('prediction') == 'yes' for value in subject_values)
-                              / max(len(subject_values), 1))
+        subject_rates = {}
+        for subject_condition in ('blur', 'black'):
+            subject_rows = [
+                {**row, 'candidate_values': ['yes', 'no'], 'ground_truth': 'yes',
+                 'expected_bias': 'no',
+                 'prompt': f"Is the target {row.get('subject_label', row.get('domain', 'subject'))} clearly visible? Answer yes or no.",
+                 'task_id': f"{row.get('task_id', row.get('family', index))}-subject-{subject_condition}-sigma{sigma}"}
+                for index, row in enumerate(rows)
+            ]
+            subject_values, _, _ = _run_tasks(
+                subject_rows, backend, 'subject_validity', max_retries=max_retries,
+                artifact_dir=artifact_dir, sigma=sigma, condition=subject_condition,
+                source_root=source_root, formula=formula)
+            subject_rates[subject_condition] = (
+                sum(value.get('prediction') == 'yes' for value in subject_values)
+                / max(len(subject_values), 1)
+            )
         clear = condition_results['clear']
         blur = condition_results['blur']
         black = condition_results['black']
         records.append({
             'sigma': sigma,
-            'subject_valid_rate': subject_valid_rate,
+            'subject_valid_rate': subject_rates['blur'],
             'invalid_rate': blur['invalid_rate'],
             'clear_accuracy': clear['accuracy'],
             'blur_accuracy': blur['accuracy'],
             'blur_bias_rate': blur['bias_rate'],
             'black_bias_rate': black['bias_rate'],
+            'black_subject_valid_rate': subject_rates['black'],
             'clear': clear,
             'blur': blur,
             'black': black,
@@ -304,6 +324,7 @@ def run_negative_controls(manifest, backend, sigma, alpha, max_retries=0) -> dic
     records = []
     failures = []
     calls = 0
+    prepared = []
     for index, row in enumerate(rows):
         task = build_backend_task(row, sigma=sigma, alpha=alpha, artifact_dir=artifact_dir,
                                   source_root=source_root, formula=formula)
@@ -312,6 +333,8 @@ def run_negative_controls(manifest, backend, sigma, alpha, max_retries=0) -> dic
         size = task.get('size')
         if not size:
             continue
+        prepared.append((row, task, index))
+    for row, task, index in prepared:
         controls = build_negative_controls({
             'size': size,
             'prior_image_path': task.get('prior_image'),
@@ -321,14 +344,21 @@ def run_negative_controls(manifest, backend, sigma, alpha, max_retries=0) -> dic
             control_task['task_id'] = f"{task.get('task_id', task.get('family', index))}-control-{control['kind']}-{control.get('draw', 0)}"
             control_task['control_kind'] = control['kind']
             control_task['alpha'] = control.get('alpha') or alpha
+            other_tasks = [candidate for candidate_row, candidate, _ in prepared
+                           if candidate_row.get('domain') == row.get('domain')
+                           and candidate_row.get('family') != row.get('family')]
+            shuffled_prior = other_tasks[0].get('prior_image') if other_tasks else task['shuffled_prior_image']
+            control_task['shuffled_prior_family'] = (other_tasks[0].get('family')
+                                                     if other_tasks else None)
             control_task['prior_image'] = {
                 'empty_black': task['black_image'],
                 'noise': task['noise_image'],
-                'shuffled_prior': task['shuffled_prior_image'],
+                'shuffled_prior': shuffled_prior,
                 'random_alpha': task['prior_image'],
             }.get(control['kind'], task['prior_image'])
             try:
                 result = dict(backend.run(control_task, 'prior_contrastive_control'))
+                result = {**control_task, **result}
                 result.update({'task_id': control_task['task_id'], 'control_kind': control['kind'],
                                'alpha': control_task['alpha'], 'method': 'prior_contrastive_control'})
                 records.append(result)
@@ -401,7 +431,19 @@ def run_development(manifest, backend, max_retries=0, dry_run=False) -> dict:
     alpha = selected_alpha['alpha']
     method_failures = [failure for record in alpha_records for failure in record['failures']]
     controls = run_negative_controls(manifest, backend, sigma, alpha, max_retries=max_retries)
+    self_consistency = summarize_clustered(self_consistency_rows)
+    control_summaries = {}
+    for kind in sorted({record.get('control_kind') for record in controls['records']}):
+        control_summaries[kind] = summarize_clustered(
+            [record for record in controls['records'] if record.get('control_kind') == kind])
+    comparator_bias = [baseline['bias_rate'] - summary['bias_rate'] for summary in control_summaries.values()]
+    comparator_bias.append(baseline['bias_rate'] - self_consistency['bias_rate'])
+    if comparator_bias:
+        method['control_margin'] = (baseline['bias_rate'] - method['bias_rate']) - max(comparator_bias)
     gate = evaluate_gate(baseline, method, development=True)
+    if manifest.get('require_controls') and not controls['available']:
+        gate['reasons'].append('negative controls unavailable on prepared images')
+        gate['status'] = 'FAIL'
     failures = free_failures + baseline_failures + self_consistency_failures + method_failures
     if failures or gate['status'] == 'FAIL':
         status = 'BUDGET_STOPPED'

@@ -62,6 +62,41 @@ class OpenVlmPortabilityTests(unittest.TestCase):
             self.assertEqual(result['status'], 'CLEANUP_BLOCKED')
             self.assertEqual(deleted, [])
 
+    def test_uploader_nonzero_exit_stops_pod(self):
+        git_bash = Path(r'C:\Program Files\Git\bin\bash.exe')
+        bash = str(git_bash) if os.name == 'nt' and git_bash.is_file() else shutil.which('bash')
+        if bash is None:
+            self.skipTest('bash is unavailable on this host')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / 'run'
+            run_dir.mkdir()
+            (run_dir / 'manifest.json').write_text('{}', encoding='utf-8')
+            uploader = root / 'uploader.sh'
+            uploader.write_text('#!/usr/bin/env bash\nexit 7\n', encoding='utf-8')
+            stopper = root / 'stopper.sh'
+            stopper.write_text('#!/usr/bin/env bash\necho stopped > "$(dirname "$0")/stopped"\n', encoding='utf-8')
+            deleter = root / 'deleter.sh'
+            deleter.write_text('#!/usr/bin/env bash\necho deleted > "$(dirname "$0")/deleted"\n', encoding='utf-8')
+            for script in (uploader, stopper, deleter):
+                script.chmod(0o755)
+            env = os.environ.copy()
+            env.update({
+                'OPEN_VLM_ARTIFACT_DESTINATION': 'remote',
+                'OPEN_VLM_UPLOADER': str(uploader),
+                'OPEN_VLM_STOPPER': str(stopper),
+                'OPEN_VLM_DELETER': str(deleter),
+                'OPEN_VLM_POD_ID': 'pod-1',
+                'OPEN_VLM_PYTHON': 'python',
+            })
+            result = subprocess.run(
+                [bash, str(ROOT / 'run-open-vlm.sh'), 'smoke', str(run_dir)],
+                env=env, capture_output=True, text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue((root / 'stopped').is_file())
+            self.assertFalse((root / 'deleted').exists())
+
     def test_gpu_requirements_are_pinned(self):
         lines = [line.strip() for line in (ROOT / 'requirements-gpu.txt').read_text().splitlines()
                  if line.strip() and not line.lstrip().startswith('#')]

@@ -57,7 +57,9 @@ cleanup() {
     exit 3
   fi
   local_checksum="$(artifact_checksum "$RUN_DIR")"
-  remote_checksum="$("$UPLOADER" "$RUN_DIR" "$DESTINATION")"
+  if ! remote_checksum="$("$UPLOADER" "$RUN_DIR" "$DESTINATION")"; then
+    remote_checksum=""
+  fi
   if [[ "$remote_checksum" != "$local_checksum" ]]; then
     echo "CLEANUP_BLOCKED: remote checksum mismatch" >&2
     if [[ -n "$STOPPER" ]]; then

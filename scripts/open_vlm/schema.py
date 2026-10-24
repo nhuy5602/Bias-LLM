@@ -129,7 +129,7 @@ def build_manifest(rows, config):
     if config.get('dataset_revision') != DATASET_REVISION:
         raise ValueError(f'Dataset revision must be {DATASET_REVISION}')
     attestations = config.get('license_attestations', {})
-    if any(attestations.get(name) != 'verified' for name in ('dataset', 'model')):
+    if any(attestations.get(name) != 'verified' for name in ('dataset', 'model')) and not config.get('prepare_only'):
         raise ValueError('Dataset and model license attestations must be verified')
 
     specs = default_domain_specs()
@@ -166,6 +166,7 @@ def build_manifest(rows, config):
         'dataset_revision': DATASET_REVISION,
         'source_root': str(config.get('source_root', '')).replace('\\', '/'),
         'license_attestations': attestations,
+        'budget_usd': config.get('budget_usd'),
         'seed': seed,
         'processor': config.get('processor', {}),
         'model': config.get('model', {}),
@@ -178,8 +179,10 @@ def build_manifest(rows, config):
             **config.get('method', {}),
         },
         'step0_records': config.get('step0_records'),
+        'require_controls': bool(config.get('require_controls', False)),
         'family_split': family_split,
         'rows': sorted(normalized, key=_row_key),
         'scientific_status': SCIENTIFIC_STATUS,
+        'execution_blocked': any(attestations.get(name) != 'verified' for name in ('dataset', 'model')),
         **extra_sets,
     }

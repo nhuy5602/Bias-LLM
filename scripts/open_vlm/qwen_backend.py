@@ -1,6 +1,7 @@
 """Lazy Qwen2.5-VL adapter with testable score-pair contrastive decoding."""
 
 import math
+import time
 from pathlib import Path
 
 from .scoring import parse_free_generation, score_candidates
@@ -112,6 +113,8 @@ class QwenBackend:
                     for candidate in candidates
                 },
                 'forward_passes': 1,
+                'image_encodes': 1,
+                'sequence_evaluations': len(candidates),
             }
         if isinstance(image, dict):
             scores = {candidate: self._score_image(image, candidate) for candidate in candidates}
@@ -121,6 +124,8 @@ class QwenBackend:
                     for candidate in candidates
                 },
                 'forward_passes': 1,
+                'image_encodes': 1,
+                'sequence_evaluations': len(candidates),
             }
         return self._score_hf_candidates(image, candidates)
 
@@ -163,7 +168,27 @@ class QwenBackend:
                       for offset, token_id in enumerate(ids)]
             scores[candidate] = values
             token_counts[candidate] = len(ids)
-        return scores, {'candidate_token_counts': token_counts, 'forward_passes': 1}
+        return scores, {'candidate_token_counts': token_counts, 'forward_passes': 1,
+                        'image_encodes': 1, 'sequence_evaluations': len(candidates)}
+
+    def _with_runtime(self, result, started):
+        seconds = time.perf_counter() - started
+        peak_memory_mb = 0.0
+        try:
+            import torch
+            if torch.cuda.is_available():
+                peak_memory_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
+        except (ImportError, RuntimeError):
+            pass
+        runtime = self.manifest.get('runtime', {})
+        rate = float(runtime.get('gpu_cost_usd_per_hour', 0.0) or 0.0)
+        result.setdefault('seconds', seconds)
+        result.setdefault('peak_memory_mb', peak_memory_mb)
+        result.setdefault('cost_usd', seconds * rate / 3600.0)
+        result.setdefault('cost_estimate_source', 'gpu_cost_usd_per_hour' if rate else 'unconfigured')
+        result.setdefault('image_encodes', result.get('forward_passes', 0))
+        result.setdefault('sequence_evaluations', 0)
+        return result
 
     def _generate(self, image, prompt, do_sample=False, temperature=1.0):
         if isinstance(image, dict):
@@ -227,10 +252,14 @@ class QwenBackend:
             'formula': formula,
             'forward_passes': clear_trace['forward_passes'] + prior_trace['forward_passes'],
             'score_trace': {'clear': clear_trace, 'prior': prior_trace},
+            'image_encodes': clear_trace.get('image_encodes', 1) + prior_trace.get('image_encodes', 1),
+            'sequence_evaluations': clear_trace.get('sequence_evaluations', len(candidates))
+            + prior_trace.get('sequence_evaluations', len(candidates)),
             'image_token_count': clear_tokens,
         }
 
     def run(self, task: dict, method: str) -> dict:
+        started = time.perf_counter()
         candidates = list(task.get('candidates', []))
         prompt = task.get('prompt', self._active_prompt)
         self._active_prompt = prompt
@@ -238,13 +267,13 @@ class QwenBackend:
             if method == 'free_generation':
                 raw = self._generate(task['image'], prompt)
                 prediction = parse_free_generation(raw, candidates) if candidates else raw
-                return {
+                return self._with_runtime({
                     'method': method,
                     'prediction': prediction,
                     'raw': raw,
                     'forward_passes': 1,
                     'image_token_count': self._resolve_image_token_count(task['image']),
-                }
+                }, started)
             if method == 'self_consistency':
                 samples = int(task.get('samples', 2))
                 temperature = float(task.get('temperature', 0.7))
@@ -253,40 +282,40 @@ class QwenBackend:
                 parsed = [parse_free_generation(raw, candidates) for raw in raw_samples]
                 valid = [value for value in parsed if value is not None]
                 prediction = max(set(valid), key=valid.count) if valid else None
-                return {
+                return self._with_runtime({
                     'method': method,
                     'prediction': prediction,
                     'raw_samples': raw_samples,
                     'forward_passes': samples,
                     'temperature': temperature,
                     'image_token_count': self._resolve_image_token_count(task['image']),
-                }
+                }, started)
             if method == 'candidate_scoring':
                 raw_scores, trace = self._score_candidates(task['image'], candidates)
                 result = score_candidates(candidates, lambda candidate: raw_scores[candidate])
-                return {**result, 'method': method, 'forward_passes': trace['forward_passes'],
+                return self._with_runtime({**result, 'method': method, 'forward_passes': trace['forward_passes'],
                         'score_trace': trace,
-                        'image_token_count': self._resolve_image_token_count(task['image'])}
+                        'image_token_count': self._resolve_image_token_count(task['image'])}, started)
             if method == 'subject_validity':
                 subject_candidates = ['yes', 'no']
                 raw_scores, trace = self._score_candidates(task['image'], subject_candidates)
                 result = score_candidates(subject_candidates, lambda candidate: raw_scores[candidate])
-                return {**result, 'method': method, 'forward_passes': trace['forward_passes'],
+                return self._with_runtime({**result, 'method': method, 'forward_passes': trace['forward_passes'],
                         'score_trace': trace,
-                        'image_token_count': self._resolve_image_token_count(task['image'])}
+                        'image_token_count': self._resolve_image_token_count(task['image'])}, started)
             if method in {'prior_contrastive', 'prior_contrastive_control'}:
-                return {**self.score_image_pair(task['image'], task['prior_image'], candidates,
+                return self._with_runtime({**self.score_image_pair(task['image'], task['prior_image'], candidates,
                                                 task['alpha'], task.get('formula', 'clear_minus_alpha_prior')),
-                        'method': method}
+                        'method': method}, started)
             if method in {'oracle_roi', 'automatic_roi'}:
                 roi_image = task.get('roi_image')
                 if roi_image is None:
                     raise ValueError(f'{method} requires roi_image')
                 raw_scores, trace = self._score_candidates(roi_image, candidates)
                 result = score_candidates(candidates, lambda candidate: raw_scores[candidate])
-                return {**result, 'method': method, 'roi_kind': method,
+                return self._with_runtime({**result, 'method': method, 'roi_kind': method,
                         'forward_passes': trace['forward_passes'], 'score_trace': trace,
-                        'image_token_count': self._resolve_image_token_count(roi_image)}
+                        'image_token_count': self._resolve_image_token_count(roi_image)}, started)
             raise ValueError(f'Unsupported Qwen method: {method}')
         finally:
             self._active_prompt = 'Return only the requested answer.'
