@@ -250,6 +250,13 @@ class QwenBackend:
                 return {**result, 'method': method, 'forward_passes': trace['forward_passes'],
                         'score_trace': trace,
                         'image_token_count': self._resolve_image_token_count(task['image'])}
+            if method == 'subject_validity':
+                subject_candidates = ['yes', 'no']
+                raw_scores, trace = self._score_candidates(task['image'], subject_candidates)
+                result = score_candidates(subject_candidates, lambda candidate: raw_scores[candidate])
+                return {**result, 'method': method, 'forward_passes': trace['forward_passes'],
+                        'score_trace': trace,
+                        'image_token_count': self._resolve_image_token_count(task['image'])}
             if method in {'prior_contrastive', 'prior_contrastive_control'}:
                 return {**self.score_image_pair(task['image'], task['prior_image'], candidates,
                                                 task['alpha'], task.get('formula', 'clear_minus_alpha_prior')),

@@ -58,6 +58,8 @@ class FakeBackend:
 class Step0Backend(FakeBackend):
     def run(self, task, method):
         self.calls.append((task['task_id'], method))
+        if method == 'subject_validity':
+            return {'prediction': 'yes', 'forward_passes': 1, 'seconds': 0.01}
         condition = task.get('condition')
         prediction = {'clear': 4, 'blur': 5, 'black': 4}.get(condition, 4)
         return {'prediction': prediction, 'forward_passes': 1, 'seconds': 0.01}

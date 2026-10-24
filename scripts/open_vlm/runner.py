@@ -257,12 +257,24 @@ def run_step0(manifest, backend, max_retries=0, dry_run=False) -> dict:
                 artifact_dir=artifact_dir, sigma=sigma, condition=condition,
                 source_root=source_root, formula=formula)
             condition_results[condition] = summarize_clustered(values)
+        subject_rows = [
+            {**row, 'candidate_values': ['yes', 'no'], 'ground_truth': 'yes',
+             'expected_bias': 'no', 'prompt': 'Is the target subject clearly visible? Answer yes or no.',
+             'task_id': f"{row.get('task_id', row.get('family', index))}-subject-sigma{sigma}"}
+            for index, row in enumerate(rows)
+        ]
+        subject_values, _, _ = _run_tasks(
+            subject_rows, backend, 'subject_validity', max_retries=max_retries,
+            artifact_dir=artifact_dir, sigma=sigma, condition='blur',
+            source_root=source_root, formula=formula)
+        subject_valid_rate = (sum(value.get('prediction') == 'yes' for value in subject_values)
+                              / max(len(subject_values), 1))
         clear = condition_results['clear']
         blur = condition_results['blur']
         black = condition_results['black']
         records.append({
             'sigma': sigma,
-            'subject_valid_rate': 1.0 - blur['invalid_rate'],
+            'subject_valid_rate': subject_valid_rate,
             'invalid_rate': blur['invalid_rate'],
             'clear_accuracy': clear['accuracy'],
             'blur_accuracy': blur['accuracy'],
