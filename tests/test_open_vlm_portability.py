@@ -104,7 +104,7 @@ class OpenVlmPortabilityTests(unittest.TestCase):
         self.assertTrue(all('==' in line for line in lines))
 
     def test_cli_marks_failed_phase_with_nonzero_exit(self):
-        self.assertIn("if result.get('status') in {'SMOKE_FAILED', 'BUDGET_STOPPED', 'FAIL'}", 
+        self.assertIn("if result.get('status') in {'SMOKE_FAILED', 'BUDGET_STOPPED', 'FAIL'}",
                       (ROOT / 'scripts' / 'open_vlm_pilot.py').read_text(encoding='utf-8'))
 
 
