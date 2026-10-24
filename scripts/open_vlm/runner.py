@@ -366,6 +366,10 @@ def run_development(manifest, backend, max_retries=0, dry_run=False) -> dict:
     baseline_rows, baseline_calls, baseline_failures = _run_tasks(
         rows, backend, 'candidate_scoring', max_retries=max_retries, dry_run=dry_run,
         artifact_dir=artifact_dir, sigma=sigma, alpha=alpha, source_root=source_root, formula=formula)
+    self_consistency_rows, self_consistency_calls, self_consistency_failures = _run_tasks(
+        [{**row, 'samples': 2, 'temperature': 0.7} for row in rows], backend,
+        'self_consistency', max_retries=max_retries, dry_run=dry_run,
+        artifact_dir=artifact_dir, sigma=sigma, alpha=alpha, source_root=source_root, formula=formula)
     alpha_records = []
     for alpha in ALPHAS:
         alpha_rows = [
@@ -398,7 +402,7 @@ def run_development(manifest, backend, max_retries=0, dry_run=False) -> dict:
     method_failures = [failure for record in alpha_records for failure in record['failures']]
     controls = run_negative_controls(manifest, backend, sigma, alpha, max_retries=max_retries)
     gate = evaluate_gate(baseline, method, development=True)
-    failures = free_failures + baseline_failures + method_failures
+    failures = free_failures + baseline_failures + self_consistency_failures + method_failures
     if failures or gate['status'] == 'FAIL':
         status = 'BUDGET_STOPPED'
         next_action = 'attention_logit_lens'
@@ -408,9 +412,10 @@ def run_development(manifest, backend, max_retries=0, dry_run=False) -> dict:
     payload = {
         'phase': 'development',
         'status': status,
-        'calls': free_calls + baseline_calls + sum(record['calls'] for record in alpha_records) + controls['calls'],
+        'calls': free_calls + baseline_calls + self_consistency_calls + sum(record['calls'] for record in alpha_records) + controls['calls'],
         'baseline_free': baseline_free,
         'baseline_candidate': baseline,
+        'baseline_self_consistency': summarize_clustered(self_consistency_rows),
         'baseline': baseline,
         'method': method,
         'gate': gate,

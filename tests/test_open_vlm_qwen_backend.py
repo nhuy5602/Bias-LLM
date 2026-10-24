@@ -115,6 +115,19 @@ class OpenVlmQwenBackendTests(unittest.TestCase):
         self.assertEqual(roi['method'], 'automatic_roi')
         self.assertEqual(roi['roi_kind'], 'automatic_roi')
 
+    def test_self_consistency_matches_two_forward_pass_budget(self):
+        backend = self.backend()
+        result = backend.run({
+            'image': {'image_tokens': 8, 'scores': {'4': [-0.1]}},
+            'candidates': ['4'],
+            'prompt': 'Count the objects.',
+            'samples': 2,
+            'temperature': 0.7,
+        }, 'self_consistency')
+        self.assertEqual(result['prediction'], '4')
+        self.assertEqual(result['forward_passes'], 2)
+        self.assertEqual(len(result['raw_samples']), 2)
+
 
 if __name__ == '__main__':
     unittest.main()

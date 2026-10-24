@@ -165,7 +165,7 @@ class QwenBackend:
             token_counts[candidate] = len(ids)
         return scores, {'candidate_token_counts': token_counts, 'forward_passes': 1}
 
-    def _generate(self, image, prompt):
+    def _generate(self, image, prompt, do_sample=False, temperature=1.0):
         if isinstance(image, dict):
             generator = getattr(self.model, 'generate', None)
             if generator is None:
@@ -173,7 +173,8 @@ class QwenBackend:
             return generator(image, prompt)
         self._active_prompt = prompt
         inputs, _ = self._prepare_hf(image)
-        output_ids = self.model.generate(**inputs, max_new_tokens=16)
+        output_ids = self.model.generate(**inputs, max_new_tokens=16,
+                                         do_sample=do_sample, temperature=temperature)
         generated = output_ids[:, inputs.input_ids.shape[1]:]
         return self.processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
 
@@ -242,6 +243,22 @@ class QwenBackend:
                     'prediction': prediction,
                     'raw': raw,
                     'forward_passes': 1,
+                    'image_token_count': self._resolve_image_token_count(task['image']),
+                }
+            if method == 'self_consistency':
+                samples = int(task.get('samples', 2))
+                temperature = float(task.get('temperature', 0.7))
+                raw_samples = [self._generate(task['image'], prompt, do_sample=True,
+                                              temperature=temperature) for _ in range(samples)]
+                parsed = [parse_free_generation(raw, candidates) for raw in raw_samples]
+                valid = [value for value in parsed if value is not None]
+                prediction = max(set(valid), key=valid.count) if valid else None
+                return {
+                    'method': method,
+                    'prediction': prediction,
+                    'raw_samples': raw_samples,
+                    'forward_passes': samples,
+                    'temperature': temperature,
                     'image_token_count': self._resolve_image_token_count(task['image']),
                 }
             if method == 'candidate_scoring':
