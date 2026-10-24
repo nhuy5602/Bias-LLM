@@ -139,12 +139,13 @@ def _run_tasks(rows, backend, method, limit=None, max_retries=0, dry_run=False,
                 _checkpoint_task(artifact_dir, method, result, attempts, failures)
                 break
             except Exception as exc:
+                attempt_result = {**task, 'method': method, 'attempt': attempt,
+                                  'prediction': None, 'error': str(exc)}
+                _checkpoint_task(artifact_dir, method, attempt_result, attempts, failures)
                 if attempt > max_retries:
                     failures.append({'task_id': task['task_id'], 'method': method, 'error': str(exc)})
-                    result = {**task, 'method': method, 'attempt': attempt,
-                              'prediction': None, 'error': str(exc)}
+                    result = attempt_result
                     results.append(result)
-                    _checkpoint_task(artifact_dir, method, result, attempts, failures)
     return results, attempts, failures
 
 
@@ -329,10 +330,14 @@ def run_negative_controls(manifest, backend, sigma, alpha, max_retries=0) -> dic
             try:
                 result = dict(backend.run(control_task, 'prior_contrastive_control'))
                 result.update({'task_id': control_task['task_id'], 'control_kind': control['kind'],
-                               'alpha': control_task['alpha']})
+                               'alpha': control_task['alpha'], 'method': 'prior_contrastive_control'})
                 records.append(result)
+                _checkpoint_task(artifact_dir, 'prior_contrastive_control', result, calls, failures)
             except Exception as exc:
-                failures.append({'task_id': control_task['task_id'], 'error': str(exc)})
+                failure = {'task_id': control_task['task_id'], 'error': str(exc),
+                           'method': 'prior_contrastive_control', 'prediction': None}
+                failures.append(failure)
+                _checkpoint_task(artifact_dir, 'prior_contrastive_control', failure, calls, failures)
             calls += 1
     return {
         'status': 'COMPLETED' if not failures else 'DEGRADED',
@@ -403,7 +408,7 @@ def run_development(manifest, backend, max_retries=0, dry_run=False) -> dict:
     payload = {
         'phase': 'development',
         'status': status,
-        'calls': free_calls + baseline_calls + sum(record['calls'] for record in alpha_records),
+        'calls': free_calls + baseline_calls + sum(record['calls'] for record in alpha_records) + controls['calls'],
         'baseline_free': baseline_free,
         'baseline_candidate': baseline,
         'baseline': baseline,
