@@ -52,7 +52,7 @@ def main(argv=None):
     if not manifest_path.is_file():
         raise SystemExit(f'Missing manifest: {manifest_path}')
     manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-    if manifest.get('execution_blocked'):
+    if manifest.get('execution_blocked') and not args.dry_run:
         raise SystemExit('Run is blocked until dataset and model license attestations are verified')
     backend = QwenBackend.from_manifest(manifest)
     if args.dry_run:

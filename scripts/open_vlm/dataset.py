@@ -150,7 +150,10 @@ def load_vlmbias_rows(domains, max_per_domain=20, page_limit=100, split='main', 
             (row for row in rows if row['domain'] == domain),
             key=lambda row: (row['family'], str(row.get('source_id', '')), row['source_path']),
         )
-        selected.extend(domain_rows[:max_per_domain])
+        unique = {}
+        for row in domain_rows:
+            unique.setdefault(row['family'], row)
+        selected.extend(list(unique.values())[:max_per_domain])
     missing = [domain for domain in domains if not any(row['domain'] == domain for row in selected)]
     if missing:
         raise ValueError(f'No pinned VLMBias rows found for domains: {missing}')

@@ -18,7 +18,7 @@ from open_vlm.runner import (  # noqa: E402
 
 class PassingFakeBackend:
     def run(self, task, method):
-        prediction = task['prior_answer'] if method in {'free_generation', 'candidate_scoring'} else task['ground_truth']
+        prediction = task['prior_answer'] if method in {'free_generation', 'candidate_scoring', 'self_consistency'} else task['ground_truth']
         return {
             'prediction': prediction,
             'score_trace': {'method': method},

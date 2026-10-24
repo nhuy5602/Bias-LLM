@@ -82,6 +82,18 @@ class OpenVlmDatasetTests(unittest.TestCase):
         self.assertEqual(len(selected), 1)
         self.assertEqual(selected[0]['domain'], 'animals')
 
+    def test_load_rows_limits_distinct_source_families(self):
+        rows = [self.row('Animals'), self.row('Animals')]
+        rows[1]['ID'] = 'row-2'
+        rows[1]['image_path'] = 'animals/dog_384.png'
+        rows[1]['metadata'] = json.dumps({'group_id': 'family-2'})
+
+        def opener(_request, timeout):
+            return Response(json.dumps({'rows': [{'row': row} for row in rows]}).encode('utf-8'))
+
+        selected = load_vlmbias_rows(('animals',), max_per_domain=2, page_limit=1, opener=opener)
+        self.assertEqual({row['family'] for row in selected}, {'animals:family-1', 'animals:family-2'})
+
     def test_prepare_run_downloads_images_and_preserves_normalized_contract(self):
         image_buffer = BytesIO()
         Image.new('RGB', (8, 8), (20, 30, 40)).save(image_buffer, format='PNG')
