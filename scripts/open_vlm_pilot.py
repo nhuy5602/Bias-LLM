@@ -22,6 +22,7 @@ def main(argv=None):
     parser.add_argument('--root', type=Path)
     parser.add_argument('--domains', nargs='+', default=['animals', 'logos'])
     parser.add_argument('--max-per-domain', type=int, default=20)
+    parser.add_argument('--calibration-max-per-domain', type=int)
     parser.add_argument('--dataset-license', choices=('pending', 'verified'), default='pending')
     parser.add_argument('--model-license', choices=('pending', 'verified'), default='pending')
     parser.add_argument('--gpu-cost-per-hour', type=float, default=0.0)
@@ -41,7 +42,8 @@ def main(argv=None):
             'budget_usd': args.budget_usd,
         }
         run_dir = prepare_vlmbias_run(args.root, 'development', args.domains, config,
-                                      max_per_domain=args.max_per_domain)
+                                      max_per_domain=args.max_per_domain,
+                                      calibration_max_per_domain=args.calibration_max_per_domain)
         print(run_dir)
         return 0
     if not any((args.dry_run, args.smoke, args.development, args.held_out, args.no_regression)):
@@ -67,7 +69,7 @@ def main(argv=None):
         from open_vlm.runner import run_no_regression
         result = run_no_regression(manifest, backend)
     print(json.dumps(result, indent=2, sort_keys=True))
-    if result.get('status') in {'SMOKE_FAILED', 'BUDGET_STOPPED', 'FAIL'}:
+    if result.get('status') in {'SMOKE_FAILED', 'BUDGET_STOPPED', 'GATE_STOPPED', 'FAIL'}:
         return 1
     return 0
 

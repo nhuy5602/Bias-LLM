@@ -15,6 +15,8 @@ from open_vlm.dataset import (  # noqa: E402
     DATASET_REVISION,
     fetch_rows,
     load_vlmbias_rows,
+    load_vlmbias_calibration_rows,
+    normalize_calibration_row,
     normalize_row,
     prepare_vlmbias_run,
     source_family,
@@ -53,6 +55,28 @@ class OpenVlmDatasetTests(unittest.TestCase):
         self.assertEqual(normalized['family'], 'animals:family-1')
         self.assertEqual(normalized['expected_bias'], 5)
         self.assertEqual(normalized['image_url'], 'https://example.test/cat.png')
+
+    def test_normalize_row_infers_subject_label_from_source_metadata(self):
+        animal = normalize_row({
+            'ID': 'animal_006_buffalo_notitle_Q1_px1152',
+            'topic': 'Animals',
+            'image_path': 'animals/buffalo_2_3_1152.png',
+            'ground_truth': 5,
+            'expected_bias': 4,
+            'image': {'src': 'https://example.test/buffalo.png'},
+            'metadata': '{}',
+        })
+        logo = normalize_row({
+            'ID': 'shoe_0010_notitle_Q1_px1152',
+            'topic': 'Logos',
+            'image_path': 'logos/adidas-black-basketball-5_1152.png',
+            'ground_truth': 4,
+            'expected_bias': 3,
+            'image': {'src': 'https://example.test/adidas.png'},
+            'metadata': json.dumps({'bias_type': 'adidas'}),
+        })
+        self.assertEqual(animal['subject_label'], 'buffalo')
+        self.assertEqual(logo['subject_label'], 'adidas')
 
     def test_source_family_falls_back_to_resolution_stripped_path(self):
         row = self.row()
@@ -118,6 +142,43 @@ class OpenVlmDatasetTests(unittest.TestCase):
         selected = load_vlmbias_rows(('animals',), max_per_domain=2, page_limit=1, opener=opener)
         self.assertEqual({row['family'] for row in selected}, {'animals:family-1', 'animals:family-2'})
 
+    def test_load_calibration_rows_uses_original_split_and_distinct_families(self):
+        rows = []
+        for family in ('elephant', 'buffalo', 'camel'):
+            rows.append({
+                'ID': f'{family}_prompt1',
+                'topic': 'Animals',
+                'type_of_question': 'Counting/Illusion',
+                'image_path': f'original_images/{family}.png',
+                'ground_truth': 4,
+                'expected_bias': None,
+                'image': {'src': f'https://example.test/{family}.png'},
+                'metadata': '{}',
+            })
+
+        def opener(request, timeout):
+            self.assertIn('split=original', request.full_url)
+            return Response(json.dumps({'rows': [{'row': row} for row in rows]}).encode('utf-8'))
+
+        selected = load_vlmbias_calibration_rows(('animals',), max_per_domain=2,
+                                                 page_limit=1, opener=opener)
+        self.assertEqual([row['family'] for row in selected],
+                         ['animals:buffalo', 'animals:camel'])
+        self.assertTrue(all(row['source_split'] == 'original' for row in selected))
+        self.assertTrue(all(row['expected_bias'] is None for row in selected))
+
+        logo = normalize_calibration_row({
+            'ID': 'audi_prompt1',
+            'topic': 'Logos',
+            'type_of_question': 'Counting/Illusion',
+            'image_path': 'original_images/images/audi_black_coupe_0.png',
+            'ground_truth': 4,
+            'expected_bias': None,
+            'image': {'src': 'https://example.test/audi.png'},
+            'metadata': '{}',
+        })
+        self.assertEqual(logo['family'], 'logos:audi-black-coupe')
+
     def test_prepare_run_downloads_images_and_preserves_normalized_contract(self):
         image_buffer = BytesIO()
         Image.new('RGB', (8, 8), (20, 30, 40)).save(image_buffer, format='PNG')
@@ -140,6 +201,41 @@ class OpenVlmDatasetTests(unittest.TestCase):
             self.assertTrue(manifest['execution_blocked'])
             self.assertEqual(manifest['rows'][0]['candidate_values'], list(range(21)))
             self.assertTrue((run_dir / manifest['rows'][0]['image_path']).is_file())
+
+    def test_prepare_run_can_attach_original_calibration_rows(self):
+        image_buffer = BytesIO()
+        Image.new('RGB', (8, 8), (20, 30, 40)).save(image_buffer, format='PNG')
+        image_bytes = image_buffer.getvalue()
+        main_row = self.row('Animals')
+        original_row = {
+            'ID': 'elephant_prompt1',
+            'topic': 'Animals',
+            'type_of_question': 'Counting/Illusion',
+            'image_path': 'original_images/elephant.png',
+            'ground_truth': 4,
+            'expected_bias': None,
+            'image': {'src': 'https://example.test/elephant.png'},
+            'metadata': '{}',
+        }
+
+        def opener(request, timeout):
+            if 'split=original' in request.full_url:
+                return Response(json.dumps({'rows': [{'row': original_row}]}).encode('utf-8'))
+            if request.full_url.startswith(BASE_ROWS_URL):
+                return Response(json.dumps({'rows': [{'row': main_row}]}).encode('utf-8'))
+            return Response(image_bytes)
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = prepare_vlmbias_run(
+                Path(directory), 'development', ['animals'], {
+                    'dataset_revision': DATASET_REVISION,
+                    'license_attestations': {'dataset': 'pending', 'model': 'pending'},
+                    'seed': 7,
+                }, max_per_domain=1, calibration_max_per_domain=1, opener=opener)
+            manifest = json.loads((run_dir / 'manifest.json').read_text(encoding='utf-8'))
+            self.assertTrue(manifest['step0_calibration'])
+            self.assertEqual(manifest['step0_rows'][0]['source_split'], 'original')
+            self.assertTrue((run_dir / manifest['step0_rows'][0]['image_path']).is_file())
 
 
 if __name__ == '__main__':

@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .diagnostics import ALPHAS, SIGMAS, build_negative_controls, materialize_image_variants, select_blur_sigma
+from .dataset import infer_subject_label
 from .scoring import classify_answer, cluster_bootstrap_delta, evaluate_gate, summarize, summarize_clustered
 from .schema import build_manifest
 
@@ -239,10 +240,25 @@ def _development_rows(manifest):
     return [row for row in rows if not allowed or row.get('family') in allowed]
 
 
+def _step0_rows(manifest):
+    if 'step0_rows' in manifest:
+        return list(manifest.get('step0_rows') or [])
+    return _development_rows(manifest)
+
+
 def run_step0(manifest, backend, max_retries=0, dry_run=False) -> dict:
+    calibration = bool(manifest.get('step0_calibration'))
+    thresholds = manifest.get('step0_thresholds', {}) if calibration else {}
+    selection_kwargs = {
+        'min_detail_drop': float(thresholds.get('min_detail_drop', 0.0 if calibration else 0.10)),
+        'require_bias_alignment': not calibration,
+        'max_black_subject_validity': float(thresholds.get(
+            'max_black_subject_validity', 0.20 if calibration else 0.20)),
+        'min_clear_accuracy': float(thresholds.get('min_clear_accuracy', 0.0)),
+    }
     preset = manifest.get('step0_records')
     if preset is not None:
-        selected = select_blur_sigma(preset)
+        selected = select_blur_sigma(preset, **selection_kwargs)
         payload = {
             'phase': 'step0',
             'status': 'PASS' if selected['status'] == 'PASS' else 'UNSUPPORTED',
@@ -252,9 +268,21 @@ def run_step0(manifest, backend, max_retries=0, dry_run=False) -> dict:
         }
         _finalize_phase(manifest, 'step0', payload)
         return payload
-    rows = _development_rows(manifest)
+    rows = _step0_rows(manifest)
     if dry_run:
         payload = {'phase': 'step0', 'status': 'DRY_RUN', 'selected_sigma': None, 'records': []}
+        _finalize_phase(manifest, 'step0', payload)
+        return payload
+    family_count = len({(row.get('domain'), row.get('family')) for row in rows})
+    min_families = int(thresholds.get('min_families', 5))
+    if family_count < min_families:
+        payload = {
+            'phase': 'step0',
+            'status': 'INCONCLUSIVE',
+            'selected_sigma': None,
+            'records': [],
+            'reason': f'Step 0 calibration requires at least {min_families} source families; observed {family_count}',
+        }
         _finalize_phase(manifest, 'step0', payload)
         return payload
     records = []
@@ -275,9 +303,15 @@ def run_step0(manifest, backend, max_retries=0, dry_run=False) -> dict:
         subject_rates = {}
         for subject_condition in ('blur', 'black'):
             subject_rows = [
-                {**row, 'candidate_values': ['yes', 'no'], 'ground_truth': 'yes',
-                 'expected_bias': 'no',
-                 'prompt': f"Is the target {row.get('subject_label', row.get('domain', 'subject'))} clearly visible? Answer yes or no.",
+                {**row, 'subject_label': infer_subject_label(row, row.get('domain')),
+                 'candidate_values': [infer_subject_label(row, row.get('domain')), 'other'],
+                 'ground_truth': infer_subject_label(row, row.get('domain')),
+                 'expected_bias': 'other',
+                 'empty_image': row.get('black_image'),
+                 'prompt': (
+                     f"Which label best describes the visible subject? Answer exactly one of "
+                     f"{{{infer_subject_label(row, row.get('domain'))}, other}}."
+                 ),
                  'task_id': f"{row.get('task_id', row.get('family', index))}-subject-{subject_condition}-sigma{sigma}"}
                 for index, row in enumerate(rows)
             ]
@@ -286,7 +320,7 @@ def run_step0(manifest, backend, max_retries=0, dry_run=False) -> dict:
                 artifact_dir=artifact_dir, sigma=sigma, condition=subject_condition,
                 source_root=source_root, formula=formula)
             subject_rates[subject_condition] = (
-                sum(value.get('prediction') == 'yes' for value in subject_values)
+                sum(value.get('prediction') == value.get('subject_label') for value in subject_values)
                 / max(len(subject_values), 1)
             )
         clear = condition_results['clear']
@@ -301,11 +335,12 @@ def run_step0(manifest, backend, max_retries=0, dry_run=False) -> dict:
             'blur_bias_rate': blur['bias_rate'],
             'black_bias_rate': black['bias_rate'],
             'black_subject_valid_rate': subject_rates['black'],
+            'subject_check': 'label_recognition',
             'clear': clear,
             'blur': blur,
             'black': black,
         })
-    selected = select_blur_sigma(records)
+    selected = select_blur_sigma(records, **selection_kwargs)
     payload = {
         'phase': 'step0',
         'status': 'PASS' if selected['status'] == 'PASS' else 'UNSUPPORTED',
@@ -383,8 +418,8 @@ def run_development(manifest, backend, max_retries=0, dry_run=False) -> dict:
     artifact_dir = _artifact_dir(manifest)
     source_root, formula = _method_config(manifest)
     step0 = run_step0(manifest, backend, max_retries=max_retries, dry_run=dry_run)
-    if step0['status'] == 'UNSUPPORTED':
-        payload = {'phase': 'development', 'status': 'BUDGET_STOPPED', 'calls': 0,
+    if step0['status'] != 'PASS':
+        payload = {'phase': 'development', 'status': 'GATE_STOPPED', 'calls': 0,
                    'step0': step0, 'next_action': 'attention_logit_lens'}
         _finalize_phase(manifest, 'development', payload)
         return payload
@@ -446,7 +481,7 @@ def run_development(manifest, backend, max_retries=0, dry_run=False) -> dict:
         gate['status'] = 'FAIL'
     failures = free_failures + baseline_failures + self_consistency_failures + method_failures
     if failures or gate['status'] == 'FAIL':
-        status = 'BUDGET_STOPPED'
+        status = 'GATE_STOPPED'
         next_action = 'attention_logit_lens'
     else:
         status = gate['status']

@@ -64,10 +64,16 @@ class CostBackend(FakeBackend):
 
 
 class Step0Backend(FakeBackend):
+    def __init__(self):
+        super().__init__()
+        self.subject_tasks = []
+
     def run(self, task, method):
         self.calls.append((task['task_id'], method))
         if method == 'subject_validity':
-            return {'prediction': 'no' if task.get('condition') == 'black' else 'yes',
+            self.subject_tasks.append(dict(task))
+            return {'prediction': task['candidates'][1] if task.get('condition') == 'black'
+                    else task['candidates'][0],
                     'forward_passes': 1, 'seconds': 0.01}
         condition = task.get('condition')
         prediction = {'clear': 4, 'blur': 5, 'black': 4}.get(condition, 4)
@@ -153,7 +159,7 @@ class OpenVlmRunnerTests(unittest.TestCase):
                                                      'invalid_rate': 0.0, 'clear_accuracy': 1.0,
                                                      'blur_accuracy': 0.0, 'blur_bias_rate': 1.0,
                                                      'black_bias_rate': 0.0}]}, backend)
-        self.assertEqual(result['status'], 'BUDGET_STOPPED')
+        self.assertEqual(result['status'], 'GATE_STOPPED')
         self.assertEqual(result['next_action'], 'attention_logit_lens')
 
     def test_development_gates_contrastive_against_candidate_scoring(self):
@@ -172,11 +178,50 @@ class OpenVlmRunnerTests(unittest.TestCase):
         self.assertIn(('task-000', 'candidate_scoring'), backend.calls)
 
     def test_step0_selects_blur_sigma_using_black_control(self):
-        rows = manifest_rows(2)
-        result = run_step0({'rows': rows}, Step0Backend())
+        rows = manifest_rows(10)
+        backend = Step0Backend()
+        result = run_step0({'rows': rows}, backend)
         self.assertEqual(result['status'], 'PASS')
         self.assertEqual(result['selected_sigma'], 1)
         self.assertEqual(result['records'][0]['blur_bias_rate'], 1.0)
+        self.assertTrue(backend.subject_tasks)
+        self.assertEqual(backend.subject_tasks[0]['candidates'], ['animals', 'other'])
+        self.assertNotIn('clearly visible', backend.subject_tasks[0]['prompt'])
+
+    def test_step0_stops_before_model_calls_when_calibration_is_underpowered(self):
+        backend = Step0Backend()
+        result = run_step0({'rows': manifest_rows(2)}, backend)
+        self.assertEqual(result['status'], 'INCONCLUSIVE')
+        self.assertIsNone(result['selected_sigma'])
+        self.assertEqual(backend.calls, [])
+        self.assertIn('at least 5 source families', result['reason'])
+
+    def test_step0_calibration_uses_original_rows_and_calibration_thresholds(self):
+        rows = []
+        for index in range(10):
+            rows.append({
+                'domain': 'animals',
+                'family': f'animals:standard-{index:02}',
+                'source_split': 'original',
+                'image_path': f'calibration/{index:02}.png',
+                'ground_truth': 4,
+                'expected_bias': None,
+                'subject_label': 'animal',
+            })
+        backend = Step0Backend()
+        result = run_step0({
+            'rows': [],
+            'step0_rows': rows,
+            'step0_calibration': True,
+            'step0_thresholds': {
+                'min_families': 10,
+                'min_clear_accuracy': 0.80,
+                'min_detail_drop': 0.20,
+                'max_black_subject_validity': 0.10,
+            },
+        }, backend)
+        self.assertEqual(result['status'], 'PASS')
+        self.assertEqual(result['selected_sigma'], 1)
 
     def test_development_uses_only_registered_dev_families(self):
         rows = manifest_rows(10)

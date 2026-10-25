@@ -11,6 +11,7 @@ from open_vlm.schema import (  # noqa: E402
     DomainSpec,
     build_manifest,
     split_families,
+    validate_calibration_row,
     validate_row,
 )
 
@@ -143,6 +144,47 @@ class OpenVlmSchemaTests(unittest.TestCase):
         self.assertEqual(manifest['family_split']['animals']['family_count'], 4)
         serialized = json.dumps(manifest, sort_keys=True, ensure_ascii=True)
         self.assertEqual(serialized, json.dumps(manifest, sort_keys=True, ensure_ascii=True))
+
+    def test_manifest_preserves_dedicated_step0_rows(self):
+        rows = [{
+            'domain': 'animals',
+            'family': 'standard-01',
+            'ground_truth': 4,
+            'expected_bias': None,
+            'source_split': 'original',
+            'image_path': 'images/standard-01.png',
+        }]
+        manifest = build_manifest([{
+            **rows[0],
+            'source_split': 'main',
+            'expected_bias': 4,
+        }], {
+            'dataset_revision': DATASET_REVISION,
+            'license_attestations': {'dataset': 'verified', 'model': 'verified'},
+            'step0_rows': rows,
+        })
+        self.assertEqual(manifest['step0_rows'][0]['family'], 'standard-01')
+
+    def test_calibration_row_requires_original_split_and_has_no_prior(self):
+        row = validate_calibration_row({
+            'domain': 'animals',
+            'family': 'animals:elephant',
+            'source_split': 'original',
+            'ground_truth': 4,
+            'expected_bias': None,
+            'image_path': 'original/elephant.png',
+        }, self.integer_domain())
+        self.assertEqual(row['ground_truth'], 4)
+        self.assertIsNone(row['expected_bias'])
+        with self.assertRaisesRegex(ValueError, 'original'):
+            validate_calibration_row({
+                'domain': 'animals',
+                'family': 'animals:elephant',
+                'source_split': 'main',
+                'ground_truth': 4,
+                'expected_bias': None,
+                'image_path': 'main/elephant.png',
+            }, self.integer_domain())
 
     def test_manifest_rejects_unverified_license(self):
         with self.assertRaisesRegex(ValueError, 'license'):

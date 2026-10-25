@@ -24,6 +24,21 @@ class FakeQwenModel:
         return {candidate: self.score_image(image, candidate) for candidate in candidates}
 
 
+class FakeTensor:
+    def __init__(self, shape):
+        self.shape = tuple(shape)
+
+    def repeat(self, *repeats):
+        if len(repeats) == 1 and isinstance(repeats[0], tuple):
+            repeats = repeats[0]
+        return FakeTensor(tuple(size * repeat for size, repeat in zip(self.shape, repeats)))
+
+    def repeat_interleave(self, count, dim=0):
+        shape = list(self.shape)
+        shape[dim] *= count
+        return FakeTensor(shape)
+
+
 class OpenVlmQwenBackendTests(unittest.TestCase):
     def backend(self):
         return QwenBackend(
@@ -69,6 +84,48 @@ class OpenVlmQwenBackendTests(unittest.TestCase):
         result = backend.run({'image': image, 'candidates': ['13', '4']}, 'candidate_scoring')
         self.assertEqual(result['forward_passes'], 1)
         self.assertEqual(result['score_trace']['candidate_token_counts'], {'13': 2, '4': 1})
+
+    def test_step0_scores_the_selected_condition_image(self):
+        backend = self.backend()
+        result = backend.run({
+            'image': {'image_tokens': 8, 'scores': {'yes': [-0.1], 'no': [-0.6]}},
+            'candidates': ['yes', 'no'],
+        }, 'step0')
+        self.assertEqual(result['method'], 'step0')
+        self.assertEqual(result['prediction'], 'yes')
+        self.assertEqual(result['forward_passes'], 1)
+
+    def test_subject_validity_uses_registered_label_candidates(self):
+        backend = self.backend()
+        result = backend.run({
+            'image': {'image_tokens': 8, 'scores': {'cow': [-0.1], 'other': [-0.6]}},
+            'candidates': ['cow', 'other'],
+        }, 'subject_validity')
+        self.assertEqual(result['prediction'], 'cow')
+        self.assertEqual(set(result['scores']), {'cow', 'other'})
+
+    def test_subject_validity_can_calibrate_against_empty_image_prior(self):
+        backend = self.backend()
+        result = backend.run({
+            'image': {'image_tokens': 8, 'scores': {'cow': [-0.1], 'other': [-0.6]}},
+            'empty_image': {'image_tokens': 8, 'scores': {'cow': [-0.2], 'other': [-0.2]}},
+            'candidates': ['cow', 'other'],
+        }, 'subject_validity')
+        self.assertEqual(result['prediction'], 'cow')
+        self.assertTrue(result['calibrated'])
+        black = backend.run({
+            'image': {'image_tokens': 8, 'scores': {'cow': [-0.2], 'other': [-0.2]}},
+            'empty_image': {'image_tokens': 8, 'scores': {'cow': [-0.2], 'other': [-0.2]}},
+            'candidates': ['cow', 'other'],
+        }, 'subject_validity')
+        self.assertIsNone(black['prediction'])
+
+    def test_visual_inputs_repeat_flattened_patches_for_each_candidate(self):
+        backend = self.backend()
+        repeated = backend._repeat_model_input('pixel_values', FakeTensor((1976, 1176)), 2)
+        grid = backend._repeat_model_input('image_grid_thw', FakeTensor((1, 3)), 2)
+        self.assertEqual(repeated.shape, (3952, 1176))
+        self.assertEqual(grid.shape, (2, 3))
 
     def test_prior_contrastive_requires_equal_image_token_counts(self):
         backend = self.backend()

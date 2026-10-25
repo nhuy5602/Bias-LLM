@@ -18,17 +18,23 @@ MIN_BIAS_LIFT_OVER_BLACK = 0.10
 MAX_BLACK_SUBJECT_VALIDITY = 0.20
 
 
-def select_blur_sigma(records) -> dict:
+def select_blur_sigma(records, *, min_detail_drop=MIN_DETAIL_DROP,
+                      require_bias_alignment=True,
+                      max_black_subject_validity=MAX_BLACK_SUBJECT_VALIDITY,
+                      min_clear_accuracy=0.0) -> dict:
     reasons = []
     for record in sorted(records, key=lambda item: item['sigma']):
         detail_drop = record['clear_accuracy'] - record['blur_accuracy']
+        bias_ok = (not require_bias_alignment or (
+            record.get('blur_bias_rate', 0.0) >= MIN_BIAS_ALIGNMENT
+            and record.get('blur_bias_rate', 0.0) - record.get('black_bias_rate', 0.0)
+            >= MIN_BIAS_LIFT_OVER_BLACK))
         if (record['subject_valid_rate'] >= MIN_SUBJECT_VALIDITY
                 and record['invalid_rate'] <= MAX_INVALID_RATE
-                and detail_drop >= MIN_DETAIL_DROP
-                and record.get('blur_bias_rate', 0.0) >= MIN_BIAS_ALIGNMENT
-                and record.get('blur_bias_rate', 0.0) - record.get('black_bias_rate', 0.0)
-                >= MIN_BIAS_LIFT_OVER_BLACK
-                and record.get('black_subject_valid_rate', 0.0) <= MAX_BLACK_SUBJECT_VALIDITY):
+                and record.get('clear_accuracy', 0.0) >= min_clear_accuracy
+                and detail_drop >= min_detail_drop
+                and bias_ok
+                and record.get('black_subject_valid_rate', 0.0) <= max_black_subject_validity):
             return {
                 'status': 'PASS',
                 'sigma': record['sigma'],

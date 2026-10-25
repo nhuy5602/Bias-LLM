@@ -50,6 +50,25 @@ class OpenVlmDiagnosticsTests(unittest.TestCase):
         records[0]['blur_bias_rate'] = 0.70
         self.assertEqual(select_blur_sigma(records)['status'], 'PASS')
 
+    def test_calibration_sigma_uses_clear_accuracy_without_bias_prior(self):
+        records = [{
+            'sigma': 3,
+            'subject_valid_rate': 0.90,
+            'invalid_rate': 0.0,
+            'clear_accuracy': 0.90,
+            'blur_accuracy': 0.70,
+            'black_subject_valid_rate': 0.10,
+        }]
+        result = select_blur_sigma(
+            records,
+            min_detail_drop=0.20,
+            min_clear_accuracy=0.80,
+            require_bias_alignment=False,
+            max_black_subject_validity=0.10,
+        )
+        self.assertEqual(result['status'], 'PASS')
+        self.assertEqual(result['sigma'], 3)
+
     def test_materialize_variants_preserves_size_and_records_provenance(self):
         with tempfile.TemporaryDirectory() as directory:
             from PIL import Image

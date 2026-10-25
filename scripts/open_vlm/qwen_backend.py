@@ -137,6 +137,21 @@ class QwenBackend:
             token_ids.append(eos)
         return token_ids
 
+    @staticmethod
+    def _repeat_model_input(key, value, candidate_count):
+        """Replicate one image batch for candidate scoring.
+
+        Qwen's processor flattens image patches into ``pixel_values`` while
+        keeping ``image_grid_thw`` batched. Both representations must be
+        replicated consistently before a batched forward pass.
+        """
+        shape = getattr(value, 'shape', ())
+        if key in {'pixel_values', 'pixel_values_videos'} and shape:
+            return value.repeat(candidate_count, *([1] * (len(shape) - 1)))
+        if shape and shape[0] == 1 and hasattr(value, 'repeat_interleave'):
+            return value.repeat_interleave(candidate_count, dim=0)
+        return value
+
     def _score_hf_candidates(self, image, candidates):
         inputs, _ = self._prepare_hf(image)
         import torch
@@ -153,10 +168,7 @@ class QwenBackend:
         for key, value in inputs.items():
             if key in {'input_ids', 'attention_mask'}:
                 continue
-            if hasattr(value, 'repeat_interleave') and getattr(value, 'shape', (1,))[0] == 1:
-                model_inputs[key] = value.repeat_interleave(len(candidates), dim=0)
-            else:
-                model_inputs[key] = value
+            model_inputs[key] = self._repeat_model_input(key, value, len(candidates))
         model_inputs.update({'input_ids': full_ids, 'attention_mask': attention})
         with torch.no_grad():
             logits = self.model(**model_inputs).logits
@@ -290,16 +302,46 @@ class QwenBackend:
                     'temperature': temperature,
                     'image_token_count': self._resolve_image_token_count(task['image']),
                 }, started)
-            if method == 'candidate_scoring':
+            if method in {'candidate_scoring', 'step0'}:
                 raw_scores, trace = self._score_candidates(task['image'], candidates)
                 result = score_candidates(candidates, lambda candidate: raw_scores[candidate])
                 return self._with_runtime({**result, 'method': method, 'forward_passes': trace['forward_passes'],
                         'score_trace': trace,
                         'image_token_count': self._resolve_image_token_count(task['image'])}, started)
             if method == 'subject_validity':
-                subject_candidates = ['yes', 'no']
+                subject_candidates = list(task.get('candidates') or ['yes', 'no'])
+                if len(subject_candidates) != 2:
+                    raise ValueError('subject_validity requires exactly two registered label candidates')
                 raw_scores, trace = self._score_candidates(task['image'], subject_candidates)
-                result = score_candidates(subject_candidates, lambda candidate: raw_scores[candidate])
+                calibrated = task.get('empty_image') or task.get('black_image')
+                if calibrated is None:
+                    result = score_candidates(subject_candidates, lambda candidate: raw_scores[candidate])
+                    result['calibrated'] = False
+                else:
+                    image_tokens = self._resolve_image_token_count(task['image'])
+                    empty_tokens = self._resolve_image_token_count(calibrated)
+                    if image_tokens != empty_tokens:
+                        raise ValueError('subject/empty image-token count must match')
+                    empty_raw, empty_trace = self._score_candidates(calibrated, subject_candidates)
+                    calibrated_scores = {
+                        candidate: sum(float(value) for value in (raw_scores[candidate]
+                                                                  if isinstance(raw_scores[candidate], (list, tuple))
+                                                                  else [raw_scores[candidate]]))
+                        - sum(float(value) for value in (empty_raw[candidate]
+                                                         if isinstance(empty_raw[candidate], (list, tuple))
+                                                         else [empty_raw[candidate]]))
+                        for candidate in subject_candidates
+                    }
+                    result = score_candidates(subject_candidates, lambda candidate: calibrated_scores[candidate])
+                    if calibrated_scores[subject_candidates[0]] <= calibrated_scores[subject_candidates[1]]:
+                        result['prediction'] = None
+                    result['calibrated'] = True
+                    result['empty_scores'] = {
+                        candidate: sum(float(value) for value in (empty_raw[candidate]
+                                                                 if isinstance(empty_raw[candidate], (list, tuple))
+                                                                 else [empty_raw[candidate]]))
+                        for candidate in subject_candidates
+                    }
                 return self._with_runtime({**result, 'method': method, 'forward_passes': trace['forward_passes'],
                         'score_trace': trace,
                         'image_token_count': self._resolve_image_token_count(task['image'])}, started)

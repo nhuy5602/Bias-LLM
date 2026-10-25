@@ -98,6 +98,36 @@ def validate_row(row: dict, domain: DomainSpec) -> dict:
     return normalized
 
 
+def validate_calibration_row(row: dict, domain: DomainSpec) -> dict:
+    """Validate an unmodified original-split row used only for Step 0."""
+    if not isinstance(row, dict):
+        raise ValueError('Dataset row must be a mapping')
+    if row.get('source_split') != 'original':
+        raise ValueError('Calibration rows must come from the original split')
+    if row.get('expected_bias') is not None:
+        raise ValueError('Calibration rows must not contain a prior answer')
+    family = str(row.get('family', '')).strip()
+    image_path = str(row.get('image_path', '')).strip()
+    if not family:
+        raise ValueError('Dataset row requires a source family')
+    if not image_path:
+        raise ValueError('Dataset row requires an image path')
+    if 'ground_truth' not in row or row['ground_truth'] is None:
+        raise ValueError('Dataset row requires a ground-truth answer')
+    normalized = dict(row)
+    normalized.update({
+        'domain': domain.name,
+        'family': family,
+        'image_path': image_path.replace('\\', '/'),
+        'answer_kind': domain.answer_kind,
+        'candidate_values': [_normalize_candidate(v, domain.answer_kind)
+                             for v in domain.candidate_values],
+        'ground_truth': _normalize_answer(row['ground_truth'], domain),
+        'prior_answer': None,
+    })
+    return normalized
+
+
 def _row_key(row):
     return (str(row.get('family', '')), str(row.get('row_id', row.get('image_path', ''))))
 
@@ -142,10 +172,11 @@ def build_manifest(rows, config):
         normalized.append(validate_row(row, specs[domain_name]))
 
     extra_sets = {}
-    for name in ('original_rows', 'sanity_rows'):
+    for name in ('original_rows', 'sanity_rows', 'step0_rows'):
         extra_rows = config.get(name)
         if extra_rows is not None:
-            extra_sets[name] = [validate_row(row, specs[row.get('domain')]) for row in extra_rows]
+            validator = validate_calibration_row if name == 'step0_rows' else validate_row
+            extra_sets[name] = [validator(row, specs[row.get('domain')]) for row in extra_rows]
 
     seed = int(config.get('seed', 0))
     family_split = {}
@@ -179,6 +210,8 @@ def build_manifest(rows, config):
             **config.get('method', {}),
         },
         'step0_records': config.get('step0_records'),
+        'step0_calibration': bool(config.get('step0_calibration', False)),
+        'step0_thresholds': copy.deepcopy(config.get('step0_thresholds', {})),
         'require_controls': bool(config.get('require_controls', False)),
         'family_split': family_split,
         'rows': sorted(normalized, key=_row_key),
