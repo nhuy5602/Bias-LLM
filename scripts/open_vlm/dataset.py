@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import random
 import re
 import time
 import urllib.error
@@ -110,11 +111,19 @@ def infer_subject_label(row, domain=None):
         label = str(value or '').strip().casefold()
         if label and label not in _GENERIC_SUBJECT_LABELS:
             return label
+    source_id = str(row.get('ID', row.get('id', ''))).strip().casefold()
+    source_id = source_id.split('_prompt', 1)[0]
+    if source_id:
+        source_id = re.sub(r'^animal_\d+_', '', source_id)
+        source_id = re.sub(r'_notitle.*$', '', source_id)
+        tokens = [token for token in re.split(r'[_\-\s]+', source_id) if token]
+        if tokens and tokens[0] not in {'animal', 'shoe', 'logo'}:
+            return ' '.join(tokens)
     source_path = str(row.get('image_path') or row.get('source_path') or '')
     stem = Path(source_path).stem.casefold()
-    token = re.split(r'[_\-\s]+', stem)[0]
-    if token and token not in _GENERIC_SUBJECT_LABELS and not token.isdigit():
-        return token
+    tokens = [token for token in re.split(r'[_\-\s]+', stem) if token]
+    if tokens and tokens[0] not in _GENERIC_SUBJECT_LABELS and not tokens[0].isdigit():
+        return ' '.join(tokens)
     return str(domain or 'subject').strip().casefold()
 
 
@@ -170,6 +179,7 @@ def normalize_row(row, domain=None):
         'prompt': row.get('prompt', ''),
         'metadata': _metadata(row),
         'subject_label': infer_subject_label(row, domain),
+        'source_split': row.get('source_split') or 'main',
     }
 
 
@@ -228,7 +238,8 @@ def normalize_calibration_row(row, domain=None):
     return validate_calibration_row(normalized, spec)
 
 
-def load_vlmbias_rows(domains, max_per_domain=20, page_limit=100, split='main', opener=None):
+def load_vlmbias_rows(domains, max_per_domain=20, page_limit=100, split='main', opener=None,
+                      seed=20261024):
     domains = tuple(dict.fromkeys(domain.casefold() for domain in domains))
     rows = []
     for offset in range(0, page_limit * PAGE_SIZE, PAGE_SIZE):
@@ -254,7 +265,9 @@ def load_vlmbias_rows(domains, max_per_domain=20, page_limit=100, split='main', 
         unique = {}
         for row in domain_rows:
             unique.setdefault(row['family'], row)
-        selected.extend(list(unique.values())[:max_per_domain])
+        families = list(unique)
+        random.Random(f'{seed}:{domain}:{split}').shuffle(families)
+        selected.extend(unique[family] for family in families[:max_per_domain])
     missing = [domain for domain in domains if not any(row['domain'] == domain for row in selected)]
     if missing:
         raise ValueError(f'No pinned VLMBias rows found for domains: {missing}')
@@ -325,11 +338,14 @@ def prepare_vlmbias_run(root, phase, domains, config, max_per_domain=20,
                         calibration_max_per_domain=None, opener=None):
     from .runner import prepare_run
 
-    rows = load_vlmbias_rows(domains, max_per_domain=max_per_domain, opener=opener)
+    seed = int(config.get('seed', 20261024))
+    rows = load_vlmbias_rows(domains, max_per_domain=max_per_domain, opener=opener, seed=seed)
     config = dict(config)
     config['source_root'] = ''
     config['prepare_only'] = True
     config['require_controls'] = True
+    if calibration_max_per_domain:
+        config['dev_fraction'] = min(float(config.get('dev_fraction', 0.8)), 0.75)
     calibration_rows = []
     if calibration_max_per_domain:
         calibration_rows = load_vlmbias_calibration_rows(
@@ -344,6 +360,14 @@ def prepare_vlmbias_run(root, phase, domains, config, max_per_domain=20,
             'max_black_subject_validity': 0.10,
             'max_invalid_rate': 0.05,
         }
+        # Hold out a disjoint counterfactual family slice to test blur-as-prior.
+        from .schema import split_families
+        bias_rows = []
+        for domain in domains:
+            domain_rows = [row for row in rows if row['domain'] == domain]
+            split = split_families(domain_rows, seed, dev_fraction=config['dev_fraction'])
+            bias_rows.extend(split['same_domain_test'])
+        config['step0_bias_rows'] = bias_rows
     run_dir = prepare_run(root, phase, rows, config)
     downloaded = download_rows(rows, run_dir, opener=opener)
     downloaded_calibration = download_rows(
@@ -356,6 +380,12 @@ def prepare_vlmbias_run(root, phase, domains, config, max_per_domain=20,
         {**row, **downloaded_by_id.get(str(row.get('source_id')), {})}
         for row in manifest['rows']
     ]
+    if config.get('step0_bias_rows'):
+        by_id = {str(row.get('source_id')): row for row in downloaded}
+        manifest['step0_bias_rows'] = [
+            {**row, **by_id.get(str(row.get('source_id')), {})}
+            for row in manifest['step0_bias_rows']
+        ]
     if calibration_rows:
         manifest['step0_rows'] = downloaded_calibration
     manifest['prepared_from'] = {

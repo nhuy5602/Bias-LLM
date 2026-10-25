@@ -172,7 +172,7 @@ def build_manifest(rows, config):
         normalized.append(validate_row(row, specs[domain_name]))
 
     extra_sets = {}
-    for name in ('original_rows', 'sanity_rows', 'step0_rows'):
+    for name in ('original_rows', 'sanity_rows', 'step0_rows', 'step0_bias_rows'):
         extra_rows = config.get(name)
         if extra_rows is not None:
             validator = validate_calibration_row if name == 'step0_rows' else validate_row
@@ -182,7 +182,7 @@ def build_manifest(rows, config):
     family_split = {}
     for domain_name in sorted({row['domain'] for row in normalized}):
         domain_rows = [row for row in normalized if row['domain'] == domain_name]
-        split = split_families(domain_rows, seed)
+        split = split_families(domain_rows, seed, dev_fraction=float(config.get('dev_fraction', 0.8)))
         families = sorted({row['family'] for row in domain_rows})
         family_split[domain_name] = {
             'family_count': len(families),
@@ -212,6 +212,7 @@ def build_manifest(rows, config):
         'step0_records': config.get('step0_records'),
         'step0_calibration': bool(config.get('step0_calibration', False)),
         'step0_thresholds': copy.deepcopy(config.get('step0_thresholds', {})),
+        'dev_fraction': float(config.get('dev_fraction', 0.8)),
         'require_controls': bool(config.get('require_controls', False)),
         'family_split': family_split,
         'rows': sorted(normalized, key=_row_key),

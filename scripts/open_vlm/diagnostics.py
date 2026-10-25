@@ -18,7 +18,9 @@ MIN_BIAS_LIFT_OVER_BLACK = 0.10
 MAX_BLACK_SUBJECT_VALIDITY = 0.20
 
 
-def select_blur_sigma(records, *, min_detail_drop=MIN_DETAIL_DROP,
+def select_blur_sigma(records, *, min_subject_validity=MIN_SUBJECT_VALIDITY,
+                      max_invalid_rate=MAX_INVALID_RATE,
+                      min_detail_drop=MIN_DETAIL_DROP,
                       require_bias_alignment=True,
                       max_black_subject_validity=MAX_BLACK_SUBJECT_VALIDITY,
                       min_clear_accuracy=0.0) -> dict:
@@ -29,8 +31,8 @@ def select_blur_sigma(records, *, min_detail_drop=MIN_DETAIL_DROP,
             record.get('blur_bias_rate', 0.0) >= MIN_BIAS_ALIGNMENT
             and record.get('blur_bias_rate', 0.0) - record.get('black_bias_rate', 0.0)
             >= MIN_BIAS_LIFT_OVER_BLACK))
-        if (record['subject_valid_rate'] >= MIN_SUBJECT_VALIDITY
-                and record['invalid_rate'] <= MAX_INVALID_RATE
+        if (record['subject_valid_rate'] >= min_subject_validity
+                and record['invalid_rate'] <= max_invalid_rate
                 and record.get('clear_accuracy', 0.0) >= min_clear_accuracy
                 and detail_drop >= min_detail_drop
                 and bias_ok
@@ -90,7 +92,9 @@ def materialize_image_variants(source_path, output_dir, sigma, seed=0):
         sigma_pixels = float(sigma) * min(size) / 384.0
         image.filter(ImageFilter.GaussianBlur(sigma_pixels)).save(blur_path, format='PNG', optimize=False)
         Image.new('RGB', image.size, (0, 0, 0)).save(black_path, format='PNG', optimize=False)
-        noise = Image.effect_noise(image.size, 127).convert('RGB')
+        rng = random.Random(seed)
+        noise_bytes = bytes(rng.randrange(256) for _ in range(image.size[0] * image.size[1] * 3))
+        noise = Image.frombytes('RGB', image.size, noise_bytes)
         noise.save(noise_path, format='PNG', optimize=False)
         image.transpose(Image.Transpose.FLIP_LEFT_RIGHT).save(shuffled_path, format='PNG', optimize=False)
     return {

@@ -180,8 +180,10 @@ class QwenBackend:
                       for offset, token_id in enumerate(ids)]
             scores[candidate] = values
             token_counts[candidate] = len(ids)
+        # The flattened patch tensor is repeated per candidate, so this is
+        # one visual-encoder evaluation per candidate, despite one model call.
         return scores, {'candidate_token_counts': token_counts, 'forward_passes': 1,
-                        'image_encodes': 1, 'sequence_evaluations': len(candidates)}
+                        'image_encodes': len(candidates), 'sequence_evaluations': len(candidates)}
 
     def _with_runtime(self, result, started):
         seconds = time.perf_counter() - started

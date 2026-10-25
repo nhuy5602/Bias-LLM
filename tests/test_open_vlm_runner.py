@@ -205,13 +205,14 @@ class OpenVlmRunnerTests(unittest.TestCase):
                 'source_split': 'original',
                 'image_path': f'calibration/{index:02}.png',
                 'ground_truth': 4,
-                'expected_bias': None,
+                'expected_bias': 5,
                 'subject_label': 'animal',
             })
         backend = Step0Backend()
         result = run_step0({
             'rows': [],
             'step0_rows': rows,
+            'step0_bias_rows': rows,
             'step0_calibration': True,
             'step0_thresholds': {
                 'min_families': 10,

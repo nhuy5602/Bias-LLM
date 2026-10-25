@@ -107,6 +107,11 @@ class OpenVlmPortabilityTests(unittest.TestCase):
         self.assertIn("if result.get('status') in {'SMOKE_FAILED', 'BUDGET_STOPPED', 'GATE_STOPPED', 'FAIL'}",
                       (ROOT / 'scripts' / 'open_vlm_pilot.py').read_text(encoding='utf-8'))
 
+    def test_gpu_cli_requires_explicit_cost_and_budget(self):
+        source = (ROOT / 'scripts' / 'open_vlm_pilot.py').read_text(encoding='utf-8')
+        self.assertIn("--prepare for GPU execution requires --gpu-cost-per-hour and --budget-usd", source)
+        self.assertIn("GPU execution requires manifest gpu_cost_usd_per_hour and budget_usd", source)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -246,12 +246,20 @@ def _step0_rows(manifest):
     return _development_rows(manifest)
 
 
+def _step0_bias_rows(manifest):
+    if 'step0_bias_rows' in manifest:
+        return list(manifest.get('step0_bias_rows') or [])
+    return _development_rows(manifest)
+
+
 def run_step0(manifest, backend, max_retries=0, dry_run=False) -> dict:
     calibration = bool(manifest.get('step0_calibration'))
     thresholds = manifest.get('step0_thresholds', {}) if calibration else {}
     selection_kwargs = {
+        'min_subject_validity': float(thresholds.get('min_subject_validity', 0.90)),
+        'max_invalid_rate': float(thresholds.get('max_invalid_rate', 0.05)),
         'min_detail_drop': float(thresholds.get('min_detail_drop', 0.0 if calibration else 0.10)),
-        'require_bias_alignment': not calibration,
+        'require_bias_alignment': True,
         'max_black_subject_validity': float(thresholds.get(
             'max_black_subject_validity', 0.20 if calibration else 0.20)),
         'min_clear_accuracy': float(thresholds.get('min_clear_accuracy', 0.0)),
@@ -268,12 +276,14 @@ def run_step0(manifest, backend, max_retries=0, dry_run=False) -> dict:
         }
         _finalize_phase(manifest, 'step0', payload)
         return payload
-    rows = _step0_rows(manifest)
+    subject_rows_source = _step0_rows(manifest)
+    metric_rows = _step0_bias_rows(manifest) if calibration else subject_rows_source
     if dry_run:
         payload = {'phase': 'step0', 'status': 'DRY_RUN', 'selected_sigma': None, 'records': []}
         _finalize_phase(manifest, 'step0', payload)
         return payload
-    family_count = len({(row.get('domain'), row.get('family')) for row in rows})
+    family_count = len({(row.get('domain'), row.get('family')) for row in subject_rows_source})
+    bias_family_count = len({(row.get('domain'), row.get('family')) for row in metric_rows})
     min_families = int(thresholds.get('min_families', 5))
     if family_count < min_families:
         payload = {
@@ -285,21 +295,42 @@ def run_step0(manifest, backend, max_retries=0, dry_run=False) -> dict:
         }
         _finalize_phase(manifest, 'step0', payload)
         return payload
+    if calibration and bias_family_count < min_families:
+        payload = {
+            'phase': 'step0',
+            'status': 'INCONCLUSIVE',
+            'selected_sigma': None,
+            'records': [],
+            'reason': f'Step 0 bias calibration requires at least {min_families} disjoint counterfactual families; observed {bias_family_count}',
+        }
+        _finalize_phase(manifest, 'step0', payload)
+        return payload
     records = []
     artifact_dir = _artifact_dir(manifest)
     source_root, formula = _method_config(manifest)
     for sigma in SIGMAS:
         condition_results = {}
+        bias_results = {}
         for condition in ('clear', 'blur', 'black'):
             condition_rows = [
                 {**row, 'task_id': f"{row.get('task_id', row.get('family', index))}-{condition}-sigma{sigma}"}
-                for index, row in enumerate(rows)
+                for index, row in enumerate(subject_rows_source if calibration else metric_rows)
             ]
             values, _, _ = _run_tasks(
                 condition_rows, backend, 'step0', max_retries=max_retries,
                 artifact_dir=artifact_dir, sigma=sigma, condition=condition,
                 source_root=source_root, formula=formula)
             condition_results[condition] = summarize_clustered(values)
+            if calibration:
+                bias_rows = [
+                    {**row, 'task_id': f"bias-{row.get('task_id', row.get('family', index))}-{condition}-sigma{sigma}"}
+                    for index, row in enumerate(metric_rows)
+                ]
+                bias_values, _, _ = _run_tasks(
+                    bias_rows, backend, 'step0', max_retries=max_retries,
+                    artifact_dir=artifact_dir, sigma=sigma, condition=condition,
+                    source_root=source_root, formula=formula)
+                bias_results[condition] = summarize_clustered(bias_values)
         subject_rates = {}
         for subject_condition in ('blur', 'black'):
             subject_rows = [
@@ -313,7 +344,7 @@ def run_step0(manifest, backend, max_retries=0, dry_run=False) -> dict:
                      f"{{{infer_subject_label(row, row.get('domain'))}, other}}."
                  ),
                  'task_id': f"{row.get('task_id', row.get('family', index))}-subject-{subject_condition}-sigma{sigma}"}
-                for index, row in enumerate(rows)
+                for index, row in enumerate(subject_rows_source)
             ]
             subject_values, _, _ = _run_tasks(
                 subject_rows, backend, 'subject_validity', max_retries=max_retries,
@@ -326,14 +357,16 @@ def run_step0(manifest, backend, max_retries=0, dry_run=False) -> dict:
         clear = condition_results['clear']
         blur = condition_results['blur']
         black = condition_results['black']
+        bias_blur = bias_results.get('blur', blur)
+        bias_black = bias_results.get('black', black)
         records.append({
             'sigma': sigma,
             'subject_valid_rate': subject_rates['blur'],
             'invalid_rate': blur['invalid_rate'],
             'clear_accuracy': clear['accuracy'],
             'blur_accuracy': blur['accuracy'],
-            'blur_bias_rate': blur['bias_rate'],
-            'black_bias_rate': black['bias_rate'],
+            'blur_bias_rate': bias_blur['bias_rate'],
+            'black_bias_rate': bias_black['bias_rate'],
             'black_subject_valid_rate': subject_rates['black'],
             'subject_check': 'label_recognition',
             'clear': clear,
@@ -371,7 +404,7 @@ def run_negative_controls(manifest, backend, sigma, alpha, max_retries=0) -> dic
         prepared.append((row, task, index))
     for row, task, index in prepared:
         controls = build_negative_controls({
-            'size': size,
+            'size': task.get('size'),
             'prior_image_path': task.get('prior_image'),
         }, seed=int(row.get('seed', index)))
         for control in controls:
@@ -381,10 +414,16 @@ def run_negative_controls(manifest, backend, sigma, alpha, max_retries=0) -> dic
             control_task['alpha'] = control.get('alpha') or alpha
             other_tasks = [candidate for candidate_row, candidate, _ in prepared
                            if candidate_row.get('domain') == row.get('domain')
-                           and candidate_row.get('family') != row.get('family')]
-            shuffled_prior = other_tasks[0].get('prior_image') if other_tasks else task['shuffled_prior_image']
-            control_task['shuffled_prior_family'] = (other_tasks[0].get('family')
-                                                     if other_tasks else None)
+                           and candidate_row.get('family') != row.get('family')
+                           and candidate.get('size') == task.get('size')]
+            if not other_tasks:
+                failures.append({'task_id': control_task['task_id'],
+                                 'error': 'No same-domain, same-size unrelated prior for shuffled control',
+                                 'method': 'prior_contrastive_control', 'prediction': None})
+                calls += 1
+                continue
+            shuffled_prior = other_tasks[0].get('prior_image')
+            control_task['shuffled_prior_family'] = other_tasks[0].get('family')
             control_task['prior_image'] = {
                 'empty_black': task['black_image'],
                 'noise': task['noise_image'],
@@ -405,11 +444,11 @@ def run_negative_controls(manifest, backend, sigma, alpha, max_retries=0) -> dic
                 _checkpoint_task(artifact_dir, 'prior_contrastive_control', failure, calls, failures)
             calls += 1
     return {
-        'status': 'COMPLETED' if not failures else 'DEGRADED',
+        'status': 'COMPLETED' if not failures else 'INCONCLUSIVE',
         'calls': calls,
         'records': records,
         'failures': failures,
-        'available': bool(records or failures),
+        'available': bool(records) and not failures,
     }
 
 
@@ -478,9 +517,10 @@ def run_development(manifest, backend, max_retries=0, dry_run=False) -> dict:
     gate = evaluate_gate(baseline, method, development=True)
     if manifest.get('require_controls') and not controls['available']:
         gate['reasons'].append('negative controls unavailable on prepared images')
-        gate['status'] = 'FAIL'
-    failures = free_failures + baseline_failures + self_consistency_failures + method_failures
-    if failures or gate['status'] == 'FAIL':
+        gate['status'] = 'INCONCLUSIVE'
+    failures = (free_failures + baseline_failures + self_consistency_failures
+                + method_failures + controls['failures'])
+    if failures or gate['status'] in {'FAIL', 'INCONCLUSIVE'} or controls['failures']:
         status = 'GATE_STOPPED'
         next_action = 'attention_logit_lens'
     else:

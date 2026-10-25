@@ -25,12 +25,14 @@ def main(argv=None):
     parser.add_argument('--calibration-max-per-domain', type=int)
     parser.add_argument('--dataset-license', choices=('pending', 'verified'), default='pending')
     parser.add_argument('--model-license', choices=('pending', 'verified'), default='pending')
-    parser.add_argument('--gpu-cost-per-hour', type=float, default=0.0)
+    parser.add_argument('--gpu-cost-per-hour', type=float)
     parser.add_argument('--budget-usd', type=float)
     args = parser.parse_args(argv)
     if args.prepare:
         if args.root is None:
             raise SystemExit('--prepare requires --root')
+        if args.gpu_cost_per_hour is None or args.budget_usd is None:
+            raise SystemExit('--prepare for GPU execution requires --gpu-cost-per-hour and --budget-usd')
         config = {
             'dataset_revision': '3761f9fd7163577534a7816c8bc1004035f2e2a0',
             'license_attestations': {'dataset': args.dataset_license, 'model': args.model_license},
@@ -56,6 +58,10 @@ def main(argv=None):
     manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     if manifest.get('execution_blocked') and not args.dry_run:
         raise SystemExit('Run is blocked until dataset and model license attestations are verified')
+    runtime = manifest.get('runtime', {})
+    if not args.dry_run and runtime.get('device') == 'cuda':
+        if runtime.get('gpu_cost_usd_per_hour') in (None, 0, 0.0) or manifest.get('budget_usd') is None:
+            raise SystemExit('GPU execution requires manifest gpu_cost_usd_per_hour and budget_usd')
     backend = QwenBackend.from_manifest(manifest)
     if args.dry_run:
         result = {'phase': manifest.get('phase', 'unknown'), 'status': 'DRY_RUN', 'calls': 0}

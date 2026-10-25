@@ -80,6 +80,17 @@ class OpenVlmDiagnosticsTests(unittest.TestCase):
             self.assertTrue(Path(variants['black_path']).is_file())
             self.assertEqual(len(variants['source_sha256']), 64)
 
+    def test_noise_variant_is_seed_reproducible_and_seed_sensitive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            from PIL import Image
+            source = Path(directory) / 'source.png'
+            Image.new('RGB', (32, 24), (120, 80, 40)).save(source)
+            first = materialize_image_variants(source, Path(directory) / 'd1', 3, seed=7)
+            second = materialize_image_variants(source, Path(directory) / 'd2', 3, seed=7)
+            third = materialize_image_variants(source, Path(directory) / 'd3', 3, seed=8)
+            self.assertEqual(first['noise_sha256'], second['noise_sha256'])
+            self.assertNotEqual(first['noise_sha256'], third['noise_sha256'])
+
     def test_sigma_selection_rejects_no_qualifying_condition(self):
         records = [{
             'sigma': sigma,

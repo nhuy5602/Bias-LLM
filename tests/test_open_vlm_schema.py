@@ -165,6 +165,22 @@ class OpenVlmSchemaTests(unittest.TestCase):
         })
         self.assertEqual(manifest['step0_rows'][0]['family'], 'standard-01')
 
+    def test_manifest_preserves_counterfactual_step0_bias_rows(self):
+        primary = [{
+            'domain': 'animals', 'family': 'main-01', 'ground_truth': 5,
+            'expected_bias': 4, 'source_split': 'main', 'image_path': 'images/main.png',
+        }]
+        bias_rows = [{
+            'domain': 'animals', 'family': 'bias-01', 'ground_truth': 5,
+            'expected_bias': 4, 'source_split': 'main', 'image_path': 'images/bias.png',
+        }]
+        manifest = build_manifest(primary, {
+            'dataset_revision': DATASET_REVISION,
+            'license_attestations': {'dataset': 'verified', 'model': 'verified'},
+            'step0_bias_rows': bias_rows,
+        })
+        self.assertEqual(manifest['step0_bias_rows'][0]['family'], 'bias-01')
+
     def test_calibration_row_requires_original_split_and_has_no_prior(self):
         row = validate_calibration_row({
             'domain': 'animals',
