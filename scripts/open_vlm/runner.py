@@ -9,7 +9,7 @@ from statistics import mean
 from .diagnostics import ALPHAS, SIGMAS, build_negative_controls, materialize_image_variants, select_blur_sigma
 from .dataset import infer_subject_label
 from .scoring import classify_answer, cluster_bootstrap_delta, evaluate_gate, summarize, summarize_clustered
-from .schema import build_manifest
+from .schema import build_manifest, step0_family_overlap_error
 
 
 class Backend:
@@ -260,6 +260,19 @@ def _step0_bias_rows(manifest):
 def run_step0(manifest, backend, max_retries=0, dry_run=False) -> dict:
     calibration = bool(manifest.get('step0_calibration'))
     thresholds = manifest.get('step0_thresholds', {}) if calibration else {}
+    if calibration and not dry_run:
+        overlap_error = step0_family_overlap_error(
+            manifest.get('rows', []), _step0_rows(manifest), _step0_bias_rows(manifest))
+        if overlap_error:
+            payload = {
+                'phase': 'step0',
+                'status': 'INCONCLUSIVE',
+                'selected_sigma': None,
+                'records': [],
+                'reason': overlap_error,
+            }
+            _finalize_phase(manifest, 'step0', payload)
+            return payload
     selection_kwargs = {
         'min_subject_validity': float(thresholds.get('min_subject_validity', 0.90)),
         'max_invalid_rate': float(thresholds.get('max_invalid_rate', 0.05)),

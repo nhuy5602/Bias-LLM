@@ -223,6 +223,7 @@ class OpenVlmRunnerTests(unittest.TestCase):
 
     def test_step0_calibration_uses_original_rows_and_calibration_thresholds(self):
         rows = []
+        bias_rows = []
         for index in range(10):
             rows.append({
                 'domain': 'animals',
@@ -233,11 +234,21 @@ class OpenVlmRunnerTests(unittest.TestCase):
                 'expected_bias': 5,
                 'subject_label': 'animal',
             })
+            bias_rows.append({
+                'domain': 'animals',
+                'family': f'animals:bias-{index:02}',
+                'task_id': f'bias-{index:02}',
+                'source_split': 'main',
+                'image_path': f'bias-calibration/{index:02}.png',
+                'ground_truth': 4,
+                'expected_bias': 5,
+                'subject_label': 'animal',
+            })
         backend = Step0Backend()
         result = run_step0({
             'rows': [],
             'step0_rows': rows,
-            'step0_bias_rows': rows,
+            'step0_bias_rows': bias_rows,
             'step0_calibration': True,
             'step0_thresholds': {
                 'min_families': 10,
@@ -248,6 +259,29 @@ class OpenVlmRunnerTests(unittest.TestCase):
         }, backend)
         self.assertEqual(result['status'], 'PASS')
         self.assertEqual(result['selected_sigma'], 1)
+
+    def test_step0_calibration_refuses_families_reused_by_evaluation(self):
+        evaluation_rows = manifest_rows(6)
+        original_rows = [
+            {**row, 'source_split': 'original', 'expected_bias': None}
+            for row in evaluation_rows
+        ]
+        bias_rows = [
+            {**row, 'family': f"bias:{row['family']}", 'task_id': f"bias-{row['task_id']}"}
+            for row in evaluation_rows
+        ]
+        backend = Step0Backend()
+        result = run_step0({
+            'rows': evaluation_rows,
+            'step0_rows': original_rows,
+            'step0_bias_rows': bias_rows,
+            'step0_calibration': True,
+            'step0_thresholds': {'min_families': 5},
+        }, backend)
+
+        self.assertEqual(result['status'], 'INCONCLUSIVE')
+        self.assertIn('Step 0 calibration family overlap', result['reason'])
+        self.assertEqual(backend.calls, [])
 
     def test_logit_lens_uses_same_families_for_fixed_conditions_and_sigmas(self):
         rows = manifest_rows(10)

@@ -37,6 +37,7 @@ class OpenVlmSchemaTests(unittest.TestCase):
         self.assertIn('scripts/open_vlm/dataset.py', fingerprint['files'])
         self.assertIn('scripts/open_vlm/__init__.py', fingerprint['files'])
         self.assertIn('run-open-vlm.sh', fingerprint['files'])
+        self.assertIn('scripts/open_vlm_runpod_guard.py', fingerprint['files'])
         self.assertIn('requirements-gpu.txt', fingerprint['files'])
         self.assertEqual(len(fingerprint['tree_sha256']), 64)
 
@@ -214,6 +215,29 @@ class OpenVlmSchemaTests(unittest.TestCase):
             'step0_bias_rows': bias_rows,
         })
         self.assertEqual(manifest['step0_bias_rows'][0]['family'], 'bias-01')
+
+    def test_manifest_rejects_step0_families_that_overlap_evaluation_rows(self):
+        main = {
+            'domain': 'animals', 'family': 'animals:family-01',
+            'ground_truth': 4, 'expected_bias': 5,
+            'source_split': 'main', 'image_path': 'images/main.png',
+        }
+        original = {
+            **main, 'expected_bias': None, 'source_split': 'original',
+            'image_path': 'calibration/original.png',
+        }
+        bias = {
+            **main, 'family': 'animals:bias-01',
+            'image_path': 'calibration/bias.png',
+        }
+        with self.assertRaisesRegex(ValueError, 'Step 0 calibration family overlap'):
+            build_manifest([main], {
+                'dataset_revision': DATASET_REVISION,
+                'license_attestations': {'dataset': 'verified', 'model': 'verified'},
+                'step0_calibration': True,
+                'step0_rows': [original],
+                'step0_bias_rows': [bias],
+            })
 
     def test_manifest_preserves_diagnostic_protocol_settings(self):
         rows = [{

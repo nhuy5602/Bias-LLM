@@ -299,8 +299,9 @@ def _select_stratified_calibration_rows(rows, domain, limit, seed, excluded_fami
 
 
 def load_vlmbias_rows(domains, max_per_domain=20, page_limit=100, split='main', opener=None,
-                      seed=20261024):
+                      seed=20261024, excluded_families=()):
     domains = tuple(dict.fromkeys(domain.casefold() for domain in domains))
+    excluded_families = set(excluded_families)
     rows = []
     for offset in range(0, page_limit * PAGE_SIZE, PAGE_SIZE):
         page = fetch_rows(split=split, offsets=(offset,), page_size=PAGE_SIZE, opener=opener)
@@ -311,7 +312,7 @@ def load_vlmbias_rows(domains, max_per_domain=20, page_limit=100, split='main', 
                 normalized = normalize_row(row)
             except (TypeError, ValueError):
                 continue
-            if normalized['domain'] in domains:
+            if normalized['domain'] in domains and normalized['family'] not in excluded_families:
                 rows.append(normalized)
         counts = {
             domain: len({row['family'] for row in rows if row['domain'] == domain})
@@ -407,20 +408,20 @@ def prepare_vlmbias_run(root, phase, domains, config, max_per_domain=20,
     if calibration_max_per_domain:
         config['dev_fraction'] = min(float(config.get('dev_fraction', 0.8)), 0.75)
     calibration_rows = []
+    bias_rows = []
     if calibration_max_per_domain:
-        from .schema import split_families
-        calibration_splits = {}
-        excluded_families = set()
-        for domain in domains:
-            domain_rows = [row for row in rows if row['domain'] == domain]
-            split = split_families(domain_rows, seed, dev_fraction=config['dev_fraction'])
-            calibration_splits[domain] = split
-            excluded_families.update(row['family'] for row in split['dev'])
-        config['step0_excluded_families'] = sorted(excluded_families)
+        main_families = {row['family'] for row in rows}
         calibration_rows = load_vlmbias_calibration_rows(
             domains, max_per_domain=calibration_max_per_domain, opener=opener, seed=seed,
-            excluded_families=excluded_families)
+            excluded_families=main_families)
+        bias_excluded_families = main_families | {row['family'] for row in calibration_rows}
+        bias_rows = load_vlmbias_rows(
+            domains, max_per_domain=calibration_max_per_domain, split='main', opener=opener,
+            seed=seed, excluded_families=bias_excluded_families)
+        config['step0_excluded_families'] = sorted(main_families)
+        config['step0_bias_excluded_families'] = sorted(bias_excluded_families)
         config['step0_rows'] = calibration_rows
+        config['step0_bias_rows'] = bias_rows
         config['step0_calibration'] = True
         config['step0_thresholds'] = {
             'min_families': len(domains) * calibration_max_per_domain,
@@ -430,15 +431,12 @@ def prepare_vlmbias_run(root, phase, domains, config, max_per_domain=20,
             'max_black_subject_validity': 0.10,
             'max_invalid_rate': 0.05,
         }
-        # Hold out a disjoint counterfactual family slice to test blur-as-prior.
-        bias_rows = []
-        for domain in domains:
-            bias_rows.extend(calibration_splits[domain]['same_domain_test'])
-        config['step0_bias_rows'] = bias_rows
     run_dir = prepare_run(root, phase, rows, config)
     downloaded = download_rows(rows, run_dir, opener=opener)
     downloaded_calibration = download_rows(
         calibration_rows, run_dir, opener=opener, image_subdir='calibration-images')
+    downloaded_bias = download_rows(
+        bias_rows, run_dir, opener=opener, image_subdir='step0-bias-images')
     manifest_path = run_dir / 'manifest.json'
     manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     manifest['source_root'] = run_dir.as_posix()
@@ -448,11 +446,7 @@ def prepare_vlmbias_run(root, phase, domains, config, max_per_domain=20,
         for row in manifest['rows']
     ]
     if config.get('step0_bias_rows'):
-        by_id = {str(row.get('source_id')): row for row in downloaded}
-        manifest['step0_bias_rows'] = [
-            {**row, **by_id.get(str(row.get('source_id')), {})}
-            for row in manifest['step0_bias_rows']
-        ]
+        manifest['step0_bias_rows'] = downloaded_bias
     if calibration_rows:
         manifest['step0_rows'] = downloaded_calibration
     manifest['prepared_from'] = {

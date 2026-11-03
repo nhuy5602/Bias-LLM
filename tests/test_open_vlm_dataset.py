@@ -355,6 +355,12 @@ class OpenVlmDatasetTests(unittest.TestCase):
         Image.new('RGB', (8, 8), (20, 30, 40)).save(image_buffer, format='PNG')
         image_bytes = image_buffer.getvalue()
         main_row = self.row('Animals')
+        bias_row = self.row('Animals')
+        bias_row.update({
+            'ID': 'calibration-row',
+            'image_path': 'animals/calibration-row_384.png',
+            'metadata': json.dumps({'group_id': 'calibration-row'}),
+        })
         original_row = {
             'ID': 'elephant_prompt1',
             'topic': 'Animals',
@@ -370,7 +376,7 @@ class OpenVlmDatasetTests(unittest.TestCase):
             if 'split=original' in request.full_url:
                 return Response(json.dumps({'rows': [{'row': original_row}]}).encode('utf-8'))
             if request.full_url.startswith(BASE_ROWS_URL):
-                return Response(json.dumps({'rows': [{'row': main_row}]}).encode('utf-8'))
+                return Response(json.dumps({'rows': [{'row': main_row}, {'row': bias_row}]}).encode('utf-8'))
             return Response(image_bytes)
 
         with tempfile.TemporaryDirectory() as directory:
@@ -384,13 +390,16 @@ class OpenVlmDatasetTests(unittest.TestCase):
             self.assertTrue(manifest['step0_calibration'])
             self.assertEqual(manifest['step0_rows'][0]['source_split'], 'original')
             self.assertTrue((run_dir / manifest['step0_rows'][0]['image_path']).is_file())
+            self.assertNotEqual(manifest['step0_bias_rows'][0]['family'],
+                                manifest['rows'][0]['family'])
+            self.assertTrue((run_dir / manifest['step0_bias_rows'][0]['image_path']).is_file())
 
     def test_prepare_run_registers_disjoint_counterfactual_bias_calibration_rows(self):
         image_buffer = BytesIO()
         Image.new('RGB', (8, 8), (20, 30, 40)).save(image_buffer, format='PNG')
         image_bytes = image_buffer.getvalue()
         main_rows = []
-        for index in range(20):
+        for index in range(28):
             row = self.row('Animals')
             row.update({
                 'ID': f'counterfactual-{index}',
@@ -409,7 +418,7 @@ class OpenVlmDatasetTests(unittest.TestCase):
             'expected_bias': None,
             'image': {'src': f'https://example.test/family-{index}.png'},
             'metadata': '{}',
-        } for index in range(20)]
+        } for index in range(28)]
 
         def opener(request, timeout):
             if 'split=original' in request.full_url:
@@ -426,7 +435,7 @@ class OpenVlmDatasetTests(unittest.TestCase):
                     'dataset_revision': DATASET_REVISION,
                     'license_attestations': {'dataset': 'pending', 'model': 'pending'},
                     'seed': 7,
-                }, max_per_domain=20, calibration_max_per_domain=5, opener=opener)
+                }, max_per_domain=20, calibration_max_per_domain=4, opener=opener)
             manifest = json.loads((run_dir / 'manifest.json').read_text(encoding='utf-8'))
             bias_paths_exist = all((run_dir / row['image_path']).is_file()
                                    for row in manifest['step0_bias_rows'])
@@ -434,16 +443,20 @@ class OpenVlmDatasetTests(unittest.TestCase):
         split = manifest['family_split']['animals']
         dev_families = set(split['dev_families'])
         test_families = set(split['same_domain_test_families'])
+        main_families = dev_families | test_families
         bias_rows = manifest['step0_bias_rows']
         bias_families = {row['family'] for row in bias_rows}
-        self.assertEqual(len(bias_families), 5)
-        self.assertEqual(bias_families, test_families)
-        self.assertFalse(bias_families & dev_families)
+        self.assertEqual(len(bias_families), 4)
+        self.assertTrue(bias_families.isdisjoint(main_families))
         original_families = {row['family'] for row in manifest['step0_rows']}
-        self.assertFalse(original_families & dev_families)
-        self.assertEqual(manifest['step0_excluded_families'], sorted(dev_families))
+        self.assertTrue(original_families.isdisjoint(main_families))
+        self.assertTrue(original_families.isdisjoint(bias_families))
+        self.assertEqual(manifest['step0_excluded_families'], sorted(main_families))
+        self.assertEqual(manifest['step0_bias_excluded_families'],
+                         sorted(main_families | original_families))
         self.assertTrue(all(row['source_split'] == 'main' for row in bias_rows))
         self.assertTrue(all(row['expected_bias'] is not None for row in bias_rows))
+        self.assertTrue(all(row['image_path'].startswith('step0-bias-images/') for row in bias_rows))
         self.assertTrue(bias_paths_exist)
 
 

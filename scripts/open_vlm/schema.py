@@ -19,6 +19,7 @@ EXECUTION_SOURCE_FILES = (
     'scripts/open_vlm/diagnostics.py',
     'scripts/open_vlm/qwen_backend.py',
     'scripts/open_vlm/runner.py',
+    'scripts/open_vlm_runpod_guard.py',
     'scripts/open_vlm/schema.py',
     'scripts/open_vlm/scoring.py',
     'requirements-gpu.txt',
@@ -187,6 +188,24 @@ def split_families(rows: list[dict], seed: int, dev_fraction: float = 0.8) -> di
     return {'dev': dev, 'same_domain_test': same_domain_test}
 
 
+def step0_family_overlap_error(rows, step0_rows, step0_bias_rows):
+    def families(source):
+        return {(row.get('domain'), row.get('family')) for row in source}
+
+    evaluation = families(rows)
+    original = families(step0_rows)
+    bias = families(step0_bias_rows)
+    comparisons = (
+        ('evaluation and original calibration', evaluation & original),
+        ('evaluation and counterfactual calibration', evaluation & bias),
+        ('original and counterfactual calibration', original & bias),
+    )
+    for label, overlap in comparisons:
+        if overlap:
+            return f'Step 0 calibration family overlap between {label}: {sorted(overlap)[0]}'
+    return None
+
+
 def build_manifest(rows, config):
     config = copy.deepcopy(config)
     if config.get('dataset_revision') != DATASET_REVISION:
@@ -210,6 +229,11 @@ def build_manifest(rows, config):
         if extra_rows is not None:
             validator = validate_calibration_row if name == 'step0_rows' else validate_row
             extra_sets[name] = [validator(row, specs[row.get('domain')]) for row in extra_rows]
+    if config.get('step0_calibration'):
+        overlap_error = step0_family_overlap_error(
+            normalized, extra_sets.get('step0_rows', []), extra_sets.get('step0_bias_rows', []))
+        if overlap_error:
+            raise ValueError(overlap_error)
 
     seed = int(config.get('seed', 0))
     diagnostics = copy.deepcopy(config.get('diagnostics', {}))
@@ -258,6 +282,7 @@ def build_manifest(rows, config):
         'step0_records': config.get('step0_records'),
         'step0_calibration': bool(config.get('step0_calibration', False)),
         'step0_excluded_families': sorted(set(config.get('step0_excluded_families', []))),
+        'step0_bias_excluded_families': sorted(set(config.get('step0_bias_excluded_families', []))),
         'step0_thresholds': copy.deepcopy(config.get('step0_thresholds', {})),
         'dev_fraction': float(config.get('dev_fraction', 0.8)),
         'diagnostics': diagnostics,
