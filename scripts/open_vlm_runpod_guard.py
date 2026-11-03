@@ -24,6 +24,11 @@ def _pod_records(payload):
     return []
 
 
+def _pod_is_inactive(pod):
+    runtime_status = str(pod.get('runtimeStatus') or '').strip().casefold()
+    return runtime_status in {'stopped', 'terminated'}
+
+
 def _write_event(log_path, event, **fields):
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -47,6 +52,7 @@ def monitor_pod(*, cli_path, pod_id, balance_before_usd, spend_cap_usd,
     started = clock()
     failures = 0
     requested_stop_reason = None
+    stop_submitted = False
     _write_event(log_path, 'watchdog_started', pod_id=pod_id,
                  balance_before_usd=balance_before_usd,
                  spend_cap_usd=spend_cap_usd, timeout_seconds=timeout_seconds)
@@ -55,10 +61,12 @@ def monitor_pod(*, cli_path, pod_id, balance_before_usd, spend_cap_usd,
         stop_reason = requested_stop_reason
         try:
             pods = _pod_records(cli(cli_path, 'pod', 'list'))
-            if not any(str(pod.get('id')) == str(pod_id) for pod in pods):
-                status = 'STOP_CONFIRMED' if requested_stop_reason else 'POD_NOT_ACTIVE'
-                _write_event(log_path, 'pod_not_active', pod_id=pod_id,
-                             stop_reason=requested_stop_reason)
+            pod = next((item for item in pods if str(item.get('id')) == str(pod_id)), None)
+            if pod is None or _pod_is_inactive(pod):
+                status = 'STOP_CONFIRMED' if requested_stop_reason or pod is not None else 'POD_NOT_ACTIVE'
+                _write_event(log_path, 'pod_inactive', pod_id=pod_id,
+                             stop_reason=requested_stop_reason,
+                             runtime_status=pod.get('runtimeStatus') if pod else None)
                 return {'status': status, 'pod_id': pod_id,
                         'reason': requested_stop_reason}
             if stop_reason is None and elapsed >= timeout_seconds:
@@ -82,15 +90,17 @@ def monitor_pod(*, cli_path, pod_id, balance_before_usd, spend_cap_usd,
             requested_stop_reason = stop_reason
 
         if requested_stop_reason:
-            try:
-                cli(cli_path, 'pod', 'stop', str(pod_id))
-                _write_event(log_path, 'stop_submitted', pod_id=pod_id,
-                             reason=requested_stop_reason, volume_preserved=True)
-            except Exception as exc:
-                failures += 1
-                _write_event(log_path, 'stop_failed', pod_id=pod_id,
-                             reason=requested_stop_reason, consecutive_failures=failures,
-                             error_type=type(exc).__name__)
+            if not stop_submitted:
+                try:
+                    cli(cli_path, 'pod', 'stop', str(pod_id))
+                    stop_submitted = True
+                    _write_event(log_path, 'stop_submitted', pod_id=pod_id,
+                                 reason=requested_stop_reason, volume_preserved=True)
+                except Exception as exc:
+                    failures += 1
+                    _write_event(log_path, 'stop_failed', pod_id=pod_id,
+                                 reason=requested_stop_reason, consecutive_failures=failures,
+                                 error_type=type(exc).__name__)
             sleep(poll_seconds)
             continue
 

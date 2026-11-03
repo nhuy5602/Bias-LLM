@@ -41,6 +41,10 @@ class OpenVlmPortabilityTests(unittest.TestCase):
         self.assertIn('OPEN_VLM_DELETER', script)
         self.assertIn('OPEN_VLM_STOPPER', script)
         self.assertIn('OPEN_VLM_TIMEOUT_SECONDS', script)
+        self.assertIn('open_vlm_runpod_guard.py', script)
+        self.assertIn('OPEN_VLM_WATCHDOG_CLI', script)
+        self.assertIn('OPEN_VLM_BALANCE_BEFORE_USD', script)
+        self.assertIn('OPEN_VLM_SPEND_CAP_USD', script)
         self.assertIn('no-regression', script)
         self.assertIn('logit-lens', script)
         self.assertIn('open_vlm_pilot.py', script)
@@ -57,6 +61,37 @@ class OpenVlmPortabilityTests(unittest.TestCase):
         result = subprocess.run([bash, str(ROOT / 'run-open-vlm.sh')], capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
         self.assertIn('usage', result.stderr.lower())
+
+    def test_launcher_requires_watchdog_registration_for_pod_runs(self):
+        bash = None
+        if os.name == 'nt':
+            candidate = Path(r'C:\Program Files\Git\bin\bash.exe')
+            bash = str(candidate) if candidate.is_file() else None
+        if bash is None:
+            bash = shutil.which('bash')
+        if bash is None:
+            self.skipTest('bash is unavailable on this host')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / 'run'
+            run_dir.mkdir()
+            command_marker = root / 'command-ran'
+            command = root / 'command.sh'
+            command.write_text(
+                '#!/usr/bin/env bash\necho ran > "' + str(command_marker).replace('\\', '/') + '"\n',
+                encoding='utf-8')
+            command.chmod(0o755)
+            env = os.environ.copy()
+            env.update({'OPEN_VLM_POD_ID': 'pod-1', 'OPEN_VLM_COMMAND': str(command)})
+
+            result = subprocess.run(
+                [bash, str(ROOT / 'run-open-vlm.sh'), 'smoke', str(run_dir)],
+                env=env, capture_output=True, text=True,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('watchdog', result.stderr.lower())
+        self.assertFalse(command_marker.exists())
 
     def test_launcher_dispatches_logit_lens_to_cli_when_no_override(self):
         bash = None
@@ -115,11 +150,17 @@ class OpenVlmPortabilityTests(unittest.TestCase):
             (run_dir / 'manifest.json').write_text('{}', encoding='utf-8')
             uploader = root / 'uploader.sh'
             uploader.write_text('#!/usr/bin/env bash\nexit 7\n', encoding='utf-8')
+            runpodctl = root / 'runpodctl.sh'
+            runpodctl.write_text(
+                '#!/usr/bin/env bash\n'
+                'if [[ "$1" == user ]]; then echo \'{"clientBalance":12.5}\'; '
+                'elif [[ "$1 $2" == "pod list" ]]; then echo \'[{"id":"pod-1"}]\'; '
+                'fi\n', encoding='utf-8')
             stopper = root / 'stopper.sh'
             stopper.write_text('#!/usr/bin/env bash\necho stopped > "$(dirname "$0")/stopped"\n', encoding='utf-8')
             deleter = root / 'deleter.sh'
             deleter.write_text('#!/usr/bin/env bash\necho deleted > "$(dirname "$0")/deleted"\n', encoding='utf-8')
-            for script in (uploader, stopper, deleter):
+            for script in (uploader, runpodctl, stopper, deleter):
                 script.chmod(0o755)
             env = os.environ.copy()
             env.update({
@@ -128,6 +169,11 @@ class OpenVlmPortabilityTests(unittest.TestCase):
                 'OPEN_VLM_STOPPER': str(stopper),
                 'OPEN_VLM_DELETER': str(deleter),
                 'OPEN_VLM_POD_ID': 'pod-1',
+                'OPEN_VLM_WATCHDOG_CLI': str(runpodctl),
+                'OPEN_VLM_BALANCE_BEFORE_USD': '12.5',
+                'OPEN_VLM_SPEND_CAP_USD': '0.1',
+                'OPEN_VLM_WATCHDOG_TIMEOUT_SECONDS': '60',
+                'OPEN_VLM_WATCHDOG_POLL_SECONDS': '1',
                 'OPEN_VLM_PYTHON': 'python',
             })
             result = subprocess.run(

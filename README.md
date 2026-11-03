@@ -50,8 +50,8 @@ Trần lượt CLI/thời gian không phải trần tiền tuyệt đối: mỗi
     python scripts/logo_duo_pilot.py --include-mercedes --dry-run
     python scripts/logo_duo_pilot.py --run-dir <prepared-run-folder>
     python scripts/open_vlm_pilot.py --dry-run --run-dir <open-vlm-run-dir>
-    python scripts/open_vlm_pilot.py --prepare --root <runs-root> --domains animals logos --dataset-license verified --model-license verified --model-revision 66285546d2b821cf421d4f5eb2576359d3770cd3 --max-per-domain 20 --gpu-cost-per-hour 0.89 --budget-usd 2
-    python scripts/open_vlm_pilot.py --prepare --root <runs-root> --domains animals logos --dataset-license verified --model-license verified --model-revision 66285546d2b821cf421d4f5eb2576359d3770cd3 --max-per-domain 20 --calibration-max-per-domain 5 --gpu-cost-per-hour 0.89 --unlimited-budget
+    python scripts/open_vlm_pilot.py --prepare --root <runs-root> --domains animals logos --dataset-license pending --model-license pending --model-revision 66285546d2b821cf421d4f5eb2576359d3770cd3 --max-per-domain 20 --gpu-cost-per-hour 0.89 --budget-usd 2
+    python scripts/open_vlm_pilot.py --prepare --root <runs-root> --domains animals logos --dataset-license pending --model-license pending --model-revision 66285546d2b821cf421d4f5eb2576359d3770cd3 --max-per-domain 20 --calibration-max-per-domain 5 --gpu-cost-per-hour 0.89 --unlimited-budget
     ./run-open-vlm.sh smoke <open-vlm-run-dir>
     ./run-open-vlm.sh logit-lens <open-vlm-run-dir>
 
@@ -82,12 +82,15 @@ The registered contrastive formula is `clear - alpha * prior`; the normalized
 VCD-style formula is available only as an explicit secondary ablation.
 Use `--prepare` to fetch the pinned VLMBias revision, download images, create
 the normalized manifest and run folder, and record image hashes. With
-`--calibration-max-per-domain`, it also creates a disjoint original-split
-calibration set and held-aside counterfactual bias slice. GPU preparation
+`--calibration-max-per-domain`, it also creates original and counterfactual
+calibration slices whose source families are disjoint from evaluation rows
+and each other. Counterfactual calibration rows are fetched beyond the
+evaluation subset and stored under `step0-bias-images/`. GPU preparation
 requires a positive hourly rate and either an explicit `--budget-usd` or
 `--unlimited-budget`. Preparation defaults license attestations to `pending`,
-so phase execution refuses to launch until dataset and model licenses are
-explicitly verified. `--logit-lens` reports layerwise truth/prior score
+and these examples only prepare blocked runs. Review the pinned terms and record
+their provenance before changing either attestation to `verified`; phase
+execution refuses to launch while either remains pending. `--logit-lens` reports layerwise truth/prior score
 trajectories descriptively; it is not causal evidence and does not require a
 passing blur gate.
 
@@ -95,12 +98,38 @@ GPU preparation and execution require `--model-revision` with an immutable
 40-character Hugging Face commit SHA. The same revision is passed to model
 weights and processor loaders. `main`, tags, or branch names are rejected so a
 future Hub update cannot silently change the model used by an experiment. The
-Qwen revision shown above is licensed for non-commercial research/evaluation
-under the Qwen Research License; verify license terms for the exact revision
-before use, and request a separate license for commercial use.
-Prepared manifests also fingerprint the CLI, runner, backend, schema, and GPU
-requirements. CUDA execution stops if any of those files change after
+At the pinned Qwen revision, `LICENSE` has SHA-256
+`b5c0e5cf74cf51af1ecbc4af597cfcd13fd9925611838884a681070838a14a50` and is the
+Qwen Research License Agreement; it permits non-commercial research or
+evaluation use only, and commercial use requires a separate license. At the
+pinned VLMBias revision, `README.md` has SHA-256
+`77e24bd9f67acaae9ef919f3a0018bb6d00ed5fae43cc94146f414b1b53b1ecf` and its
+metadata declares MIT. These hashes identify the reviewed files; the preparation
+examples leave attestations pending so an operator must confirm the terms before
+execution.
+Prepared manifests also fingerprint the CLI, runner, backend, watchdog, schema,
+and GPU requirements. CUDA execution stops if any of those files change after
 preparation; prepare a new run to register updated code.
+
+For a paid pod phase, set the pod ID, preflight balance, registered spend cap,
+and `runpodctl` path before invoking the launcher:
+
+```bash
+export OPEN_VLM_POD_ID="<registered-pod-id>"
+export OPEN_VLM_WATCHDOG_CLI="$(command -v runpodctl)"
+export OPEN_VLM_BALANCE_BEFORE_USD="<verified-account-balance>"
+export OPEN_VLM_SPEND_CAP_USD="<registered-run-cap>"
+export OPEN_VLM_TIMEOUT_SECONDS=2700
+export OPEN_VLM_WATCHDOG_TIMEOUT_SECONDS=3600
+export OPEN_VLM_WATCHDOG_POLL_SECONDS=30
+./run-open-vlm.sh smoke <open-vlm-run-dir>
+```
+
+The launcher validates the RunPod CLI, account, and pod-list commands before
+starting inference, then runs the spend/time watchdog beside the phase. A pod
+ID without the watchdog settings is rejected. The watchdog writes
+`watchdog.jsonl` into the run directory; the launcher stops its local monitor
+before checksum verification and upload.
 
 -ContinueLatest lấy proposal đã xác minh của vòng gần nhất (3 ở full mode, 2 ở duo mode), chạy đúng một vòng phản biện/sửa đề xuất rồi tổng hợp. Nó tạo budget ledger mới, giữ PDF và role ownership, đồng thời từ chối nếu report/hash đầu vào không khớp. -ExtendBudget tiếp tục ledger mới nhất sau khi quota hết; chỉ cho giữ nguyên hoặc tăng thời gian/per-member-call ceilings, không giảm hoặc reset calls, retries, costs, đổi nguồn hay model. Mọi lần tăng thực tế được ghi trong manifest. Dùng -ResumeRunId cùng -ExtendBudget để tiếp tục một ledger cũ mà không đổi latest.json; controller vẫn kiểm tra source hash và report hash. -RepairGemini dùng prompt đã lưu để chạy riêng tác vụ Gemini đã hết retry, giữ nguyên lịch sử timeout và tạo synthesis reconciliation mới. -RepairGeminiSynthesis có thể chạy một tác vụ synthesis recovery riêng sau bốn timeout; lượt recovery có ledger riêng, không tăng số retry của task gốc. Timeout riêng mặc định 600 giây; task recovery vẫn tối đa 3 retry. -UnlimitedBudget chỉ dùng với -ExtendBudget hoặc -ContinueLatest; bỏ trần tổng/per-member calls, elapsed time và USD kể cả Claude native, nhưng giữ timeout từng request và tối đa 3 retry. Mọi launch, retry, elapsed time và chi phí CLI báo được vẫn ghi vào ledger. `run-series.ps1` tiếp tục tuần tự tới số vòng được yêu cầu, cập nhật series ledger sau mỗi run, và dừng ở trạng thái chưa hoàn tất. -NewRun tạo nghiên cứu độc lập từ đầu. Nếu sửa PDF, giới hạn hoặc controller, không tái sử dụng kết quả cũ một cách ngầm định. OS lock ngăn chạy hai controller đồng thời. Không kill cứng controller; dùng Ctrl+C để dọn cây tiến trình.
 
