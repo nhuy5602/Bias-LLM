@@ -8,7 +8,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from .schema import DATASET_REVISION, DEFAULT_DATASET, default_domain_specs, validate_calibration_row
@@ -39,6 +40,23 @@ def _json_response(response):
     return json.loads(data)
 
 
+def _retry_delay(exc, attempt, backoff_seconds):
+    fallback = backoff_seconds * (2 ** attempt)
+    retry_after = exc.headers.get('Retry-After') if exc.headers else None
+    if not retry_after:
+        return fallback
+    try:
+        return max(0.0, float(retry_after))
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(retry_after)
+        except (TypeError, ValueError, OverflowError):
+            return fallback
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+
+
 def _open_with_retry(request, opener, retries=4, backoff_seconds=1.0):
     transient = {429, 500, 502, 503, 504}
     for attempt in range(retries + 1):
@@ -47,7 +65,7 @@ def _open_with_retry(request, opener, retries=4, backoff_seconds=1.0):
         except urllib.error.HTTPError as exc:
             if exc.code not in transient or attempt >= retries:
                 raise
-            time.sleep(backoff_seconds * (2 ** attempt))
+            time.sleep(_retry_delay(exc, attempt, backoff_seconds))
         except urllib.error.URLError:
             if attempt >= retries:
                 raise
@@ -238,6 +256,48 @@ def normalize_calibration_row(row, domain=None):
     return validate_calibration_row(normalized, spec)
 
 
+def _calibration_stratum(row):
+    if row['domain'] == 'animals':
+        return f"count:{row.get('ground_truth')}"
+    if row['domain'] == 'logos':
+        metadata = row.get('metadata') or {}
+        family_label = str(row.get('family', '')).split(':', 1)[-1]
+        brand = metadata.get('bias_type') or family_label.split('-', 1)[0]
+        return f'brand:{str(brand).casefold()}'
+    return str(row.get('family', 'unknown'))
+
+
+def _select_stratified_calibration_rows(rows, domain, limit, seed, excluded_families=()):
+    excluded_families = set(excluded_families)
+    unique = {}
+    for row in sorted(rows, key=lambda item: (item['family'], str(item.get('source_id', '')))):
+        if row['family'] not in excluded_families:
+            unique.setdefault(row['family'], row)
+
+    strata = {}
+    for row in unique.values():
+        strata.setdefault(_calibration_stratum(row), []).append(row)
+
+    rng = random.Random(f'{seed}:{domain}:original-calibration')
+    stratum_names = sorted(strata)
+    rng.shuffle(stratum_names)
+    for name in stratum_names:
+        rng.shuffle(strata[name])
+
+    selected = []
+    while len(selected) < limit:
+        added = False
+        for name in stratum_names:
+            if strata[name]:
+                selected.append(strata[name].pop())
+                added = True
+                if len(selected) == limit:
+                    break
+        if not added:
+            break
+    return selected
+
+
 def load_vlmbias_rows(domains, max_per_domain=20, page_limit=100, split='main', opener=None,
                       seed=20261024):
     domains = tuple(dict.fromkeys(domain.casefold() for domain in domains))
@@ -253,7 +313,10 @@ def load_vlmbias_rows(domains, max_per_domain=20, page_limit=100, split='main', 
                 continue
             if normalized['domain'] in domains:
                 rows.append(normalized)
-        counts = {domain: sum(row['domain'] == domain for row in rows) for domain in domains}
+        counts = {
+            domain: len({row['family'] for row in rows if row['domain'] == domain})
+            for domain in domains
+        }
         if all(counts[domain] >= max_per_domain for domain in domains):
             break
     selected = []
@@ -275,8 +338,9 @@ def load_vlmbias_rows(domains, max_per_domain=20, page_limit=100, split='main', 
 
 
 def load_vlmbias_calibration_rows(domains=('animals', 'logos'), max_per_domain=5,
-                                  page_limit=100, opener=None):
-    """Load deterministic, unmodified original-split rows for Step 0."""
+                                  page_limit=100, opener=None, seed=20261024,
+                                  excluded_families=()):
+    """Load seeded, stratified, unmodified original-split rows for Step 0."""
     domains = tuple(dict.fromkeys(domain.casefold() for domain in domains))
     rows = []
     for offset in range(0, page_limit * PAGE_SIZE, PAGE_SIZE):
@@ -292,17 +356,13 @@ def load_vlmbias_calibration_rows(domains=('animals', 'logos'), max_per_domain=5
                 continue
             if normalized['domain'] in domains:
                 rows.append(normalized)
-        if all(sum(row['domain'] == domain for row in rows) >= max_per_domain
-               for domain in domains):
+        if len(page) < PAGE_SIZE:
             break
     selected = []
     for domain in domains:
-        domain_rows = sorted((row for row in rows if row['domain'] == domain),
-                             key=lambda row: (row['family'], str(row.get('source_id', ''))))
-        unique = {}
-        for row in domain_rows:
-            unique.setdefault(row['family'], row)
-        selected.extend(list(unique.values())[:max_per_domain])
+        domain_rows = [row for row in rows if row['domain'] == domain]
+        selected.extend(_select_stratified_calibration_rows(
+            domain_rows, domain, max_per_domain, seed, excluded_families))
     missing = [domain for domain in domains if not any(row['domain'] == domain for row in selected)]
     if missing:
         raise ValueError(f'No original VLMBias calibration rows found for domains: {missing}')
@@ -348,8 +408,18 @@ def prepare_vlmbias_run(root, phase, domains, config, max_per_domain=20,
         config['dev_fraction'] = min(float(config.get('dev_fraction', 0.8)), 0.75)
     calibration_rows = []
     if calibration_max_per_domain:
+        from .schema import split_families
+        calibration_splits = {}
+        excluded_families = set()
+        for domain in domains:
+            domain_rows = [row for row in rows if row['domain'] == domain]
+            split = split_families(domain_rows, seed, dev_fraction=config['dev_fraction'])
+            calibration_splits[domain] = split
+            excluded_families.update(row['family'] for row in split['dev'])
+        config['step0_excluded_families'] = sorted(excluded_families)
         calibration_rows = load_vlmbias_calibration_rows(
-            domains, max_per_domain=calibration_max_per_domain, opener=opener)
+            domains, max_per_domain=calibration_max_per_domain, opener=opener, seed=seed,
+            excluded_families=excluded_families)
         config['step0_rows'] = calibration_rows
         config['step0_calibration'] = True
         config['step0_thresholds'] = {
@@ -361,12 +431,9 @@ def prepare_vlmbias_run(root, phase, domains, config, max_per_domain=20,
             'max_invalid_rate': 0.05,
         }
         # Hold out a disjoint counterfactual family slice to test blur-as-prior.
-        from .schema import split_families
         bias_rows = []
         for domain in domains:
-            domain_rows = [row for row in rows if row['domain'] == domain]
-            split = split_families(domain_rows, seed, dev_fraction=config['dev_fraction'])
-            bias_rows.extend(split['same_domain_test'])
+            bias_rows.extend(calibration_splits[domain]['same_domain_test'])
         config['step0_bias_rows'] = bias_rows
     run_dir = prepare_run(root, phase, rows, config)
     downloaded = download_rows(rows, run_dir, opener=opener)

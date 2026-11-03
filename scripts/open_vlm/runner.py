@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
+from statistics import mean
 
 from .diagnostics import ALPHAS, SIGMAS, build_negative_controls, materialize_image_variants, select_blur_sigma
 from .dataset import infer_subject_label
@@ -68,6 +69,8 @@ def _finalize_phase(manifest, phase, payload):
     state.update({
         'phase': phase,
         'phase_status': payload.get('status'),
+        'status': ('BUDGET_STOPPED' if state.get('status') == 'BUDGET_STOPPED'
+                   else payload.get('status')),
         'scientific_status': 'NEEDS_EVIDENCE',
     })
     if phase == 'development':
@@ -105,6 +108,7 @@ def _checkpoint_task(artifact_dir, method, result, attempts, failures):
         'calls': int(state.get('calls', 0)) + 1,
         'attempts': int(state.get('attempts', 0)) + 1,
         'forward_passes': int(state.get('forward_passes', 0)) + int(result.get('forward_passes', 0) or 0),
+        'image_encodes': int(state.get('image_encodes', 0)) + int(result.get('image_encodes', 0) or 0),
         'cost_usd': float(state.get('cost_usd', 0.0)) + float(result.get('cost_usd', 0.0) or 0.0),
         'last_method': method,
         'last_task_id': task_id,
@@ -186,6 +190,7 @@ def prepare_run(root, phase, rows, config) -> Path:
         'cost_usd': 0.0,
         'forward_passes': 0,
         'budget_usd': manifest.get('budget_usd'),
+        'budget_mode': manifest.get('budget_mode'),
     }, indent=2), encoding='utf-8')
     return run_dir
 
@@ -420,7 +425,6 @@ def run_negative_controls(manifest, backend, sigma, alpha, max_retries=0) -> dic
                 failures.append({'task_id': control_task['task_id'],
                                  'error': 'No same-domain, same-size unrelated prior for shuffled control',
                                  'method': 'prior_contrastive_control', 'prediction': None})
-                calls += 1
                 continue
             shuffled_prior = other_tasks[0].get('prior_image')
             control_task['shuffled_prior_family'] = other_tasks[0].get('family')
@@ -548,6 +552,134 @@ def run_development(manifest, backend, max_retries=0, dry_run=False) -> dict:
         ],
     }
     _finalize_phase(manifest, 'development', payload)
+    return payload
+
+
+def run_logit_lens(manifest, backend, max_retries=0, dry_run=False) -> dict:
+    """Describe layerwise truth-versus-prior scores on a fixed dev subset."""
+    rows = _development_rows(manifest)
+    family_count = len({(row.get('domain'), row.get('family')) for row in rows})
+    artifact_dir = _artifact_dir(manifest)
+    spec = manifest.get('diagnostics', {}).get('logit_lens', {})
+    min_families = int(spec.get('min_families', 5))
+    conditions = list(spec.get('conditions', ['clear', 'black', 'blur']))
+    sigma_grid = tuple(int(value) for value in spec.get(
+        'sigmas', manifest.get('method', {}).get('sigmas', SIGMAS)))
+    if dry_run:
+        payload = {'phase': 'logit-lens', 'status': 'DRY_RUN', 'calls': 0,
+                   'family_count': family_count, 'diagnostic_spec': spec}
+        _finalize_phase(manifest, 'logit-lens', payload)
+        return payload
+    if family_count < min_families:
+        payload = {'phase': 'logit-lens', 'status': 'INCONCLUSIVE', 'calls': 0,
+                   'family_count': family_count,
+                   'reason': f'Logit-lens diagnostic requires at least {min_families} development source families'}
+        _finalize_phase(manifest, 'logit-lens', payload)
+        return payload
+
+    source_root, formula = _method_config(manifest)
+    method = manifest.get('method', {})
+    sigmas = sigma_grid
+    results = []
+    failures = []
+    calls = 0
+    forward_passes = 0
+    image_encodes = 0
+    token_counts_by_family = {}
+    condition_grid = [('clear', None), ('black', None)]
+    condition_grid.extend(('blur', sigma) for sigma in sigmas)
+    condition_grid = [item for item in condition_grid if item[0] in conditions]
+    for condition, sigma in condition_grid:
+        variant_sigma = sigma if sigma is not None else 0
+        tasks = []
+        for row in rows:
+            truth = row.get('ground_truth')
+            prior = row.get('prior_answer', row.get('expected_bias'))
+            if prior is None or str(truth) == str(prior):
+                failures.append({'task_id': row.get('task_id', row.get('family')),
+                                 'method': 'logit_lens',
+                                 'error': 'Truth and registered prior must be distinct for this diagnostic',
+                                 'prediction': None})
+                continue
+            sigma_suffix = f'-sigma{sigma}' if sigma is not None else ''
+            tasks.append({
+                **row,
+                'candidate_values': [truth, prior],
+                'lens_sigma': sigma,
+                'task_id': (f"{row.get('task_id', row.get('family'))}-logit-lens-"
+                            f"{condition}{sigma_suffix}"),
+            })
+        values, group_calls, group_failures = _run_tasks(
+            tasks, backend, 'logit_lens', max_retries=max_retries,
+            artifact_dir=artifact_dir, sigma=variant_sigma, condition=condition,
+            source_root=source_root, formula=formula)
+        for value in values:
+            value['lens_sigma'] = sigma
+        results.extend(values)
+        failures.extend(group_failures)
+        calls += group_calls
+        forward_passes += sum(int(value.get('forward_passes', 0) or 0) for value in values)
+        image_encodes += sum(int(value.get('image_encodes', 0) or 0) for value in values)
+        for value in values:
+            token_count = value.get('image_token_count')
+            if token_count is not None:
+                token_counts_by_family.setdefault(value.get('family'), set()).add(int(token_count))
+
+    if spec.get('require_image_token_parity', True):
+        for family, token_counts in token_counts_by_family.items():
+            if len(token_counts) > 1:
+                failures.append({
+                    'task_id': f'{family}-logit-lens-token-parity',
+                    'method': 'logit_lens',
+                    'error': f'image token counts differ across conditions: {sorted(token_counts)}',
+                    'prediction': None,
+                })
+
+    grouped = {}
+    for result in results:
+        if result.get('error'):
+            continue
+        key = (result.get('condition'), result.get('lens_sigma'))
+        layers = grouped.setdefault(key, {})
+        for layer in result.get('layerwise_scores', []):
+            layers.setdefault(int(layer['layer']), []).append((
+                result.get('family'), float(layer.get('prior_minus_truth_logprob', 0.0))))
+    summary = []
+    for (condition, sigma), layer_groups in sorted(
+            grouped.items(), key=lambda item: (item[0][0], -1 if item[0][1] is None else item[0][1])):
+        layer_rows = []
+        for layer_index, family_deltas in sorted(layer_groups.items()):
+            per_family = {}
+            for family, delta in family_deltas:
+                per_family.setdefault(family, []).append(delta)
+            deltas = [mean(values) for values in per_family.values()]
+            layer_rows.append({
+                'layer': layer_index,
+                'family_count': len(deltas),
+                'mean_prior_minus_truth_logprob': mean(deltas),
+                'prior_preferred_rate': mean(float(delta > 0.0) for delta in deltas),
+            })
+        summary.append({'condition': condition, 'sigma': sigma,
+                        'family_count': len({family for values in layer_groups.values()
+                                             for family, _ in values}),
+                        'layers': layer_rows})
+    payload = {
+        'phase': 'logit-lens',
+        'status': 'INCONCLUSIVE' if failures else 'COMPLETED_EXPLORATORY',
+        'calls': calls,
+        'forward_passes': forward_passes,
+        'image_encodes': image_encodes,
+        'family_count': family_count,
+        'sigma_grid': list(sigmas),
+        'diagnostic_spec': spec,
+        'candidate_contract': 'two registered strings: ground_truth and prior_answer',
+        'summary': summary,
+        'results': results,
+        'failures': failures,
+        'scientific_status': 'NEEDS_EVIDENCE',
+        'interpretation_limit': 'Layerwise logit-lens trajectories are descriptive, not causal evidence.',
+    }
+    _finalize_phase(manifest, 'logit-lens', payload)
     return payload
 
 

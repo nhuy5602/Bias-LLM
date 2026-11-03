@@ -1,6 +1,8 @@
 import sys
 import unittest
 from pathlib import Path
+from types import ModuleType
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
@@ -23,6 +25,14 @@ class FakeQwenModel:
     def score_image_batch(self, image, candidates):
         return {candidate: self.score_image(image, candidate) for candidate in candidates}
 
+    def score_candidate_lens(self, image, candidates):
+        return [
+            {'layer': 0, 'scores': {candidate: [-0.1] if candidate == '5' else [-0.5]
+                                    for candidate in candidates}},
+            {'layer': 1, 'scores': {candidate: [-0.6] if candidate == '5' else [-0.1]
+                                    for candidate in candidates}},
+        ]
+
 
 class FakeTensor:
     def __init__(self, shape):
@@ -37,6 +47,121 @@ class FakeTensor:
         shape = list(self.shape)
         shape[dim] *= count
         return FakeTensor(shape)
+
+
+class FakeNoGradTorch:
+    def __init__(self):
+        self.grad_enabled = True
+
+    class _NoGrad:
+        def __init__(self, torch):
+            self.torch = torch
+            self.previous = torch.grad_enabled
+
+        def __enter__(self):
+            self.torch.grad_enabled = False
+
+        def __exit__(self, *_args):
+            self.torch.grad_enabled = self.previous
+
+    def no_grad(self):
+        return self._NoGrad(self)
+
+    def tensor(self, values, **_kwargs):
+        return values
+
+    def cat(self, _values, **_kwargs):
+        return object()
+
+    def ones(self, *_args, **_kwargs):
+        return object()
+
+    def arange(self, start, stop, **_kwargs):
+        return list(range(start, stop))
+
+    def log_softmax(self, logits, dim):
+        if self.grad_enabled:
+            raise AssertionError('log_softmax ran with gradients enabled')
+        return logits
+
+
+class FakeInputIds:
+    shape = (1, 2)
+    dtype = 'int64'
+
+    def repeat(self, *_args):
+        return self
+
+
+class FakeInputs(dict):
+    def __init__(self):
+        self.input_ids = FakeInputIds()
+        super().__init__(input_ids=self.input_ids, attention_mask=object())
+
+
+class FakeHiddenState:
+    def __init__(self, torch):
+        self.torch = torch
+
+    def index_select(self, _dim, _positions):
+        if self.torch.grad_enabled:
+            raise AssertionError('hidden-state projection ran with gradients enabled')
+        return self
+
+
+class FakeScoreScalar:
+    def __init__(self, torch, value):
+        self.torch = torch
+        self.value = value
+
+    def __float__(self):
+        if self.torch.grad_enabled:
+            raise AssertionError('log-probability scalarized with gradients enabled')
+        return self.value
+
+
+class FakeProjectedScores:
+    def __init__(self, torch):
+        self.torch = torch
+
+    def __getitem__(self, index):
+        return FakeScoreScalar(self.torch, index[-1] / 10)
+
+
+class FakeLogits:
+    def __init__(self, torch):
+        self.torch = torch
+
+    def float(self):
+        if self.torch.grad_enabled:
+            raise AssertionError('lm_head output cast with gradients enabled')
+        return FakeProjectedScores(self.torch)
+
+
+class FakeHFQwenModel:
+    def __init__(self, torch):
+        self.torch = torch
+        self.model = self
+        self.language_model = self
+        self.norm = self._norm
+        self.lm_head = self._lm_head
+
+    def __call__(self, **_inputs):
+        if self.torch.grad_enabled:
+            raise AssertionError('model forward ran with gradients enabled')
+        return type('Outputs', (), {
+            'hidden_states': (FakeHiddenState(self.torch), FakeHiddenState(self.torch)),
+        })()
+
+    def _norm(self, hidden):
+        if self.torch.grad_enabled:
+            raise AssertionError('RMSNorm ran with gradients enabled')
+        return hidden
+
+    def _lm_head(self, _hidden):
+        if self.torch.grad_enabled:
+            raise AssertionError('lm_head ran with gradients enabled')
+        return FakeLogits(self.torch)
 
 
 class OpenVlmQwenBackendTests(unittest.TestCase):
@@ -61,6 +186,58 @@ class OpenVlmQwenBackendTests(unittest.TestCase):
         self.assertEqual(backend.runtime['min_pixels'], 256)
         self.assertEqual(backend.runtime['max_pixels'], 512)
         self.assertEqual(backend.runtime['attention'], 'sdpa')
+        self.assertTrue(backend.runtime['image_processor_use_fast'])
+
+    def test_loader_passes_manifest_processor_mode_to_transformers(self):
+        for use_fast in (True, False):
+            with self.subTest(use_fast=use_fast):
+                torch = ModuleType('torch')
+                torch.bfloat16 = object()
+                processor_calls = []
+                model_calls = []
+
+                class FakeModel:
+                    def to(self, _device):
+                        return self
+
+                    def eval(self):
+                        return self
+
+                class FakeModelLoader:
+                    @staticmethod
+                    def from_pretrained(*_args, **kwargs):
+                        model_calls.append(kwargs)
+                        return FakeModel()
+
+                class FakeProcessorLoader:
+                    @staticmethod
+                    def from_pretrained(*_args, **kwargs):
+                        processor_calls.append(kwargs)
+                        return object()
+
+                transformers = ModuleType('transformers')
+                transformers.AutoProcessor = FakeProcessorLoader
+                transformers.Qwen2_5_VLForConditionalGeneration = FakeModelLoader
+                with patch.dict(sys.modules, {'torch': torch, 'transformers': transformers}), \
+                     patch('open_vlm.qwen_backend._package_version', return_value='4.57.6'):
+                    backend = QwenBackend(manifest={
+                        'model': {'id': 'Qwen/Qwen2.5-VL-3B-Instruct',
+                                  'revision': '66285546d2b821cf421d4f5eb2576359d3770cd3'},
+                        'runtime': {'device': 'cpu', 'dtype': 'bfloat16',
+                                    'image_processor_use_fast': use_fast},
+                    })
+                    backend._ensure_loaded()
+
+                self.assertEqual(processor_calls[0]['use_fast'], use_fast)
+                self.assertEqual(model_calls[0]['revision'], '66285546d2b821cf421d4f5eb2576359d3770cd3')
+                self.assertEqual(processor_calls[0]['revision'], '66285546d2b821cf421d4f5eb2576359d3770cd3')
+                self.assertIn('dtype', model_calls[0])
+                self.assertNotIn('torch_dtype', model_calls[0])
+
+    def test_loader_rejects_missing_model_revision_before_import(self):
+        backend = QwenBackend(manifest={'model': {'id': 'Qwen/Qwen2.5-VL-3B-Instruct'}})
+        with self.assertRaisesRegex(RuntimeError, 'model.revision.*commit SHA'):
+            backend._ensure_loaded()
 
     def test_candidate_scoring_handles_multi_token_answer(self):
         backend = self.backend()
@@ -126,6 +303,38 @@ class OpenVlmQwenBackendTests(unittest.TestCase):
         grid = backend._repeat_model_input('image_grid_thw', FakeTensor((1, 3)), 2)
         self.assertEqual(repeated.shape, (3952, 1176))
         self.assertEqual(grid.shape, (2, 3))
+
+    def test_logit_lens_reports_ground_truth_vs_prior_delta_by_layer(self):
+        backend = self.backend()
+        result = backend.run({
+            'image': {'image_tokens': 8},
+            'candidates': ['5', '4'],
+            'ground_truth': 5,
+            'prior_answer': 4,
+            'prompt': 'Count and return a number.',
+        }, 'logit_lens')
+        self.assertEqual(result['method'], 'logit_lens')
+        self.assertEqual(result['forward_passes'], 1)
+        self.assertEqual(result['image_encodes'], 2)
+        self.assertEqual([row['prior_minus_truth_logprob'] for row in result['layerwise_scores']],
+                         [-0.4, 0.5])
+        self.assertEqual([row['prediction'] for row in result['layerwise_scores']], ['5', '4'])
+
+    def test_logit_lens_hf_projection_runs_all_tensor_ops_without_gradients(self):
+        torch = FakeNoGradTorch()
+        backend = self.backend()
+        backend.model = FakeHFQwenModel(torch)
+        backend.processor = type('Processor', (), {
+            'tokenizer': type('Tokenizer', (), {'pad_token_id': 0})(),
+        })()
+        with patch.object(backend, '_prepare_hf', return_value=(FakeInputs(), None)), \
+             patch.object(backend, '_candidate_token_ids', side_effect=[[1], [2]]), \
+             patch.dict(sys.modules, {'torch': torch}):
+            layers, trace = backend._score_candidates_by_layer('image.png', ['truth', 'prior'])
+
+        self.assertEqual(layers[0]['scores'], {'truth': [0.1], 'prior': [0.2]})
+        self.assertEqual(trace['forward_passes'], 1)
+        self.assertTrue(torch.grad_enabled)
 
     def test_prior_contrastive_requires_equal_image_token_counts(self):
         backend = self.backend()

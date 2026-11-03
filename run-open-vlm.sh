@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 <smoke|development|held-out|no-regression> <run-dir>" >&2
+  echo "usage: $0 <smoke|development|held-out|no-regression|logit-lens> <run-dir>" >&2
 }
 
 if [[ $# -ne 2 ]]; then
@@ -19,9 +19,10 @@ DELETER="${OPEN_VLM_DELETER:-}"
 STOPPER="${OPEN_VLM_STOPPER:-}"
 POD_ID="${OPEN_VLM_POD_ID:-}"
 TIMEOUT_SECONDS="${OPEN_VLM_TIMEOUT_SECONDS:-3600}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 case "$PHASE" in
-  smoke|development|held-out|no-regression) ;;
+  smoke|development|held-out|no-regression|logit-lens) ;;
   *) echo "unsupported phase: $PHASE" >&2; exit 2 ;;
 esac
 
@@ -74,9 +75,21 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ -n "${OPEN_VLM_COMMAND:-}" ]]; then
-  if command -v timeout >/dev/null 2>&1; then
-    timeout --signal=TERM "$TIMEOUT_SECONDS" "$OPEN_VLM_COMMAND" "$PHASE" "$RUN_DIR"
-  else
-    "$OPEN_VLM_COMMAND" "$PHASE" "$RUN_DIR"
-  fi
+  COMMAND=("$OPEN_VLM_COMMAND" "$PHASE" "$RUN_DIR")
+else
+  case "$PHASE" in
+    smoke) PHASE_FLAG="--smoke" ;;
+    development) PHASE_FLAG="--development" ;;
+    held-out) PHASE_FLAG="--held-out" ;;
+    no-regression) PHASE_FLAG="--no-regression" ;;
+    logit-lens) PHASE_FLAG="--logit-lens" ;;
+  esac
+  export PYTHONPATH="$SCRIPT_DIR/scripts${PYTHONPATH:+:$PYTHONPATH}"
+  COMMAND=("$PYTHON_BIN" "$SCRIPT_DIR/scripts/open_vlm_pilot.py" "$PHASE_FLAG" --run-dir "$RUN_DIR")
+fi
+
+if command -v timeout >/dev/null 2>&1; then
+  timeout --signal=TERM "$TIMEOUT_SECONDS" "${COMMAND[@]}"
+else
+  "${COMMAND[@]}"
 fi

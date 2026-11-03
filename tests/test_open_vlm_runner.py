@@ -1,8 +1,10 @@
 import json
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
@@ -11,6 +13,8 @@ from open_vlm.runner import (  # noqa: E402
     prepare_run,
     run_development,
     run_held_out,
+    run_logit_lens,
+    run_negative_controls,
     run_no_regression,
     run_step0,
     run_smoke,
@@ -78,6 +82,27 @@ class Step0Backend(FakeBackend):
         condition = task.get('condition')
         prediction = {'clear': 4, 'blur': 5, 'black': 4}.get(condition, 4)
         return {'prediction': prediction, 'forward_passes': 1, 'seconds': 0.01}
+
+
+class LogitLensBackend(FakeBackend):
+    def run(self, task, method):
+        self.calls.append((task['task_id'], method))
+        truth, prior = task['candidates']
+        return {
+            'method': method,
+            'forward_passes': 1,
+            'image_encodes': 2,
+            'sequence_evaluations': 2,
+            'image_token_count': task.get('image_tokens', 2016),
+            'layerwise_scores': [
+                {'layer': 0, 'scores': {truth: -0.1, prior: -0.5},
+                 'prediction': truth, 'prior_minus_truth_logprob': -0.4},
+                {'layer': 1, 'scores': {truth: -0.6, prior: -0.1},
+                 'prediction': prior, 'prior_minus_truth_logprob': 0.5},
+            ],
+            'seconds': 0.01,
+            'peak_memory_mb': 10,
+        }
 
 
 class OpenVlmRunnerTests(unittest.TestCase):
@@ -223,6 +248,86 @@ class OpenVlmRunnerTests(unittest.TestCase):
         }, backend)
         self.assertEqual(result['status'], 'PASS')
         self.assertEqual(result['selected_sigma'], 1)
+
+    def test_logit_lens_uses_same_families_for_fixed_conditions_and_sigmas(self):
+        rows = manifest_rows(10)
+        for row in rows:
+            row.update(size=[384, 384], source_sha256=f"hash-{row['task_id']}")
+        backend = LogitLensBackend()
+        spec = {'conditions': ['clear', 'black', 'blur'], 'sigmas': [1, 3, 6, 12],
+                'min_families': 5, 'candidate_pair': ['ground_truth', 'prior_answer']}
+        result = run_logit_lens({'rows': rows, 'diagnostics': {'logit_lens': spec}}, backend)
+        self.assertEqual(result['status'], 'COMPLETED_EXPLORATORY')
+        self.assertEqual(result['family_count'], 10)
+        self.assertEqual(result['calls'], 60)
+        self.assertEqual({method for _, method in backend.calls}, {'logit_lens'})
+        self.assertEqual({task_id.split('-logit-lens-')[1].split('-sigma')[0]
+                          for task_id, _ in backend.calls}, {'clear', 'black', 'blur'})
+        blur_one = next(group for group in result['summary']
+                        if group['condition'] == 'blur' and group['sigma'] == 1)
+        self.assertEqual(blur_one['layers'][1]['prior_preferred_rate'], 1.0)
+        self.assertEqual(result['diagnostic_spec'], spec)
+
+    def test_logit_lens_finalizes_status_and_image_encode_counters(self):
+        rows = manifest_rows(5)
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            (run_dir / 'state.json').write_text(json.dumps({
+                'status': 'PREPARED', 'calls': 0, 'attempts': 0,
+                'failure_count': 0, 'cost_usd': 0.0,
+                'forward_passes': 0, 'image_encodes': 0,
+            }), encoding='utf-8')
+            manifest = {
+                'rows': rows,
+                'run_dir': str(run_dir),
+                'diagnostics': {'logit_lens': {'sigmas': [1, 3, 6, 12]}},
+            }
+            result = run_logit_lens(manifest, LogitLensBackend())
+            state = json.loads((run_dir / 'state.json').read_text(encoding='utf-8'))
+
+        self.assertEqual(result['calls'], 30)
+        self.assertEqual(result['image_encodes'], 60)
+        self.assertEqual(state['calls'], 30)
+        self.assertEqual(state['forward_passes'], 30)
+        self.assertEqual(state['image_encodes'], 60)
+        self.assertEqual(state['status'], 'COMPLETED_EXPLORATORY')
+        self.assertEqual(state['phase_status'], 'COMPLETED_EXPLORATORY')
+
+    def test_logit_lens_marks_image_token_mismatch_inconclusive(self):
+        rows = manifest_rows(10)
+        for row in rows:
+            row['size'] = [384, 384]
+        class MismatchedLensBackend(LogitLensBackend):
+            def run(self, task, method):
+                result = super().run(task, method)
+                result['image_token_count'] = 2048 if task['condition'] == 'blur' else 2016
+                return result
+        result = run_logit_lens({'rows': rows}, MismatchedLensBackend())
+        self.assertEqual(result['status'], 'INCONCLUSIVE')
+        self.assertTrue(any('image token counts differ' in failure['error']
+                            for failure in result['failures']))
+
+    def test_missing_shuffled_control_is_inconclusive_without_counting_a_model_call(self):
+        rows = manifest_rows(2)
+        backend = FakeBackend()
+        prepared = []
+        for index, row in enumerate(rows):
+            task = {**row, 'size': [384, 384], 'black_image': f'black-{index}',
+                    'noise_image': f'noise-{index}', 'prior_image': f'prior-{index}',
+                    'shuffled_prior_image': f'shuffled-{index}'}
+            prepared.append((row, task, index))
+        with patch('open_vlm.runner.build_backend_task',
+                   side_effect=lambda row, **_kwargs: next(task for candidate, task, _ in prepared
+                                                          if candidate['family'] == row['family'])):
+            with patch('open_vlm.runner.build_negative_controls', return_value=[
+                {'kind': 'shuffled_prior', 'draw': 0, 'alpha': None},
+            ]):
+                result = run_negative_controls({'rows': rows}, backend, sigma=3, alpha=1.0)
+        self.assertEqual(result['status'], 'INCONCLUSIVE')
+        self.assertFalse(result['available'])
+        self.assertEqual(result['calls'], 0)
+        self.assertEqual(len(result['failures']), 2)
+        self.assertEqual(backend.calls, [])
 
     def test_development_uses_only_registered_dev_families(self):
         rows = manifest_rows(10)

@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from .scoring import parse_free_generation, score_candidates
+from .schema import is_model_commit_sha
 
 
 class QwenBackend:
@@ -17,12 +18,14 @@ class QwenBackend:
         self.processor = processor
         self.manifest = manifest
         self.model_id = model_config.get('id', 'Qwen/Qwen2.5-VL-3B-Instruct')
+        self.model_revision = model_config.get('revision')
         self.runtime = {
             'min_pixels': int(processor_config.get('min_pixels', 256 * 28 * 28)),
             'max_pixels': int(processor_config.get('max_pixels', 512 * 28 * 28)),
             'device': runtime_config.get('device', 'cuda'),
             'dtype': runtime_config.get('dtype', 'bfloat16'),
             'attention': runtime_config.get('attention', 'sdpa'),
+            'image_processor_use_fast': bool(runtime_config.get('image_processor_use_fast', True)),
         }
         self._active_prompt = 'Return only the requested answer.'
         self._last_image_token_count = None
@@ -34,6 +37,8 @@ class QwenBackend:
     def _ensure_loaded(self):
         if self.model is not None and self.processor is not None:
             return
+        if not is_model_commit_sha(self.model_revision):
+            raise RuntimeError('Qwen backend requires model.revision to be a 40-character commit SHA')
         try:
             import torch
             from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
@@ -43,13 +48,16 @@ class QwenBackend:
         dtype = getattr(torch, self.runtime['dtype'], torch.bfloat16)
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             self.model_id,
-            torch_dtype=dtype,
+            revision=self.model_revision,
+            dtype=dtype,
             attn_implementation=self.runtime['attention'],
         ).to(self.runtime['device']).eval()
         self.processor = AutoProcessor.from_pretrained(
             self.model_id,
+            revision=self.model_revision,
             min_pixels=self.runtime['min_pixels'],
             max_pixels=self.runtime['max_pixels'],
+            use_fast=self.runtime['image_processor_use_fast'],
         )
         self.runtime['transformers_version'] = _package_version('transformers')
         self.runtime['torch_version'] = _package_version('torch')
@@ -185,6 +193,93 @@ class QwenBackend:
         return scores, {'candidate_token_counts': token_counts, 'forward_passes': 1,
                         'image_encodes': len(candidates), 'sequence_evaluations': len(candidates)}
 
+    def _score_candidates_by_layer(self, image, candidates):
+        if isinstance(image, dict) and hasattr(self.model, 'score_candidate_lens'):
+            layers = self.model.score_candidate_lens(image, candidates)
+            return layers, {
+                'candidate_token_counts': {candidate: 1 for candidate in candidates},
+                'forward_passes': 1,
+                'image_encodes': len(candidates),
+                'sequence_evaluations': len(candidates),
+                'layer_count': len(layers),
+            }
+        return self._score_hf_candidates_by_layer(image, candidates)
+
+    def _score_hf_candidates_by_layer(self, image, candidates):
+        inputs, _ = self._prepare_hf(image)
+        import torch
+        candidate_ids = [self._candidate_token_ids(candidate) for candidate in candidates]
+        max_candidate = max(len(ids) for ids in candidate_ids)
+        base_ids = inputs.input_ids
+        prompt_length = base_ids.shape[1]
+        pad_id = getattr(self.processor.tokenizer, 'pad_token_id', 0) or 0
+        padded = [ids + [pad_id] * (max_candidate - len(ids)) for ids in candidate_ids]
+        candidate_tensor = torch.tensor(padded, device=self.runtime['device'], dtype=base_ids.dtype)
+        model_inputs = {}
+        for key, value in inputs.items():
+            if key in {'input_ids', 'attention_mask'}:
+                continue
+            model_inputs[key] = self._repeat_model_input(key, value, len(candidates))
+        model_inputs.update({
+            'input_ids': torch.cat([base_ids.repeat(len(candidates), 1), candidate_tensor], dim=1),
+            'attention_mask': torch.ones((len(candidates), prompt_length + max_candidate),
+                                         device=self.runtime['device'], dtype=base_ids.dtype),
+            'output_hidden_states': True,
+            'use_cache': False,
+            'return_dict': True,
+        })
+        with torch.no_grad():
+            outputs = self.model(**model_inputs)
+            hidden_states = getattr(outputs, 'hidden_states', None)
+            if not hidden_states:
+                raise RuntimeError('Qwen did not return hidden states for logit-lens diagnostics')
+            language_model = getattr(getattr(self.model, 'model', None), 'language_model', None)
+            norm = getattr(language_model, 'norm', None)
+            lm_head = getattr(self.model, 'lm_head', None)
+            if norm is None or lm_head is None:
+                raise RuntimeError('Qwen text RMSNorm or lm_head unavailable for logit-lens diagnostics')
+            positions = torch.arange(prompt_length - 1, prompt_length - 1 + max_candidate,
+                                     device=self.runtime['device'])
+            layers = []
+            for layer_index, hidden in enumerate(hidden_states):
+                # Intermediate states are pre-norm; the last returned state is post-norm.
+                normalized = norm(hidden) if layer_index < len(hidden_states) - 1 else hidden
+                logits = lm_head(normalized.index_select(1, positions)).float()
+                log_probs = torch.log_softmax(logits, dim=-1)
+                scores = {}
+                for candidate_index, (candidate, token_ids) in enumerate(zip(candidates, candidate_ids)):
+                    scores[candidate] = [
+                        float(log_probs[candidate_index, offset, token_id])
+                        for offset, token_id in enumerate(token_ids)
+                    ]
+                layers.append({'layer': layer_index, 'scores': scores})
+        trace = {
+            'candidate_token_counts': {candidate: len(ids) for candidate, ids in zip(candidates, candidate_ids)},
+            'forward_passes': 1,
+            'image_encodes': len(candidates),
+            'sequence_evaluations': len(candidates),
+            'layer_count': len(hidden_states),
+        }
+        return layers, trace
+
+    def _format_logit_lens(self, layers, candidates, task):
+        truth = str(task.get('ground_truth'))
+        prior = str(task.get('prior_answer', task.get('expected_bias')))
+        formatted = []
+        for layer in layers:
+            scores = {
+                candidate: sum(float(value) for value in (
+                    layer['scores'][candidate] if isinstance(layer['scores'][candidate], (list, tuple))
+                    else [layer['scores'][candidate]]))
+                for candidate in candidates
+            }
+            prediction = max(enumerate(candidates), key=lambda item: (scores[item[1]], -item[0]))[1]
+            record = {'layer': int(layer['layer']), 'scores': scores, 'prediction': prediction}
+            if truth in scores and prior in scores:
+                record['prior_minus_truth_logprob'] = scores[prior] - scores[truth]
+            formatted.append(record)
+        return formatted
+
     def _with_runtime(self, result, started):
         seconds = time.perf_counter() - started
         peak_memory_mb = 0.0
@@ -310,6 +405,23 @@ class QwenBackend:
                 return self._with_runtime({**result, 'method': method, 'forward_passes': trace['forward_passes'],
                         'score_trace': trace,
                         'image_token_count': self._resolve_image_token_count(task['image'])}, started)
+            if method == 'logit_lens':
+                if len(candidates) != 2:
+                    raise ValueError('logit_lens requires exactly two registered candidates: truth and prior')
+                layers, trace = self._score_candidates_by_layer(task['image'], candidates)
+                layerwise_scores = self._format_logit_lens(layers, candidates, task)
+                return self._with_runtime({
+                    'method': method,
+                    'prediction': layerwise_scores[-1]['prediction'],
+                    'layerwise_scores': layerwise_scores,
+                    'candidate_token_counts': trace['candidate_token_counts'],
+                    'layer_count': trace['layer_count'],
+                    'forward_passes': trace['forward_passes'],
+                    'image_encodes': trace['image_encodes'],
+                    'sequence_evaluations': trace['sequence_evaluations'],
+                    'score_trace': trace,
+                    'image_token_count': self._resolve_image_token_count(task['image']),
+                }, started)
             if method == 'subject_validity':
                 subject_candidates = list(task.get('candidates') or ['yes', 'no'])
                 if len(subject_candidates) != 2:

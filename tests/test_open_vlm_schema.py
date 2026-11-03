@@ -10,6 +10,7 @@ from open_vlm.schema import (  # noqa: E402
     DATASET_REVISION,
     DomainSpec,
     build_manifest,
+    is_model_commit_sha,
     split_families,
     validate_calibration_row,
     validate_row,
@@ -17,6 +18,34 @@ from open_vlm.schema import (  # noqa: E402
 
 
 class OpenVlmSchemaTests(unittest.TestCase):
+    def test_manifest_records_execution_source_fingerprints(self):
+        rows = [{
+            'domain': 'animals', 'family': 'animal-01', 'ground_truth': 4,
+            'expected_bias': 5, 'image_path': 'images/animal.png',
+        }]
+        manifest = build_manifest(rows, {
+            'dataset_revision': DATASET_REVISION,
+            'license_attestations': {'dataset': 'verified', 'model': 'verified'},
+            'model': {'id': 'Qwen/Qwen2.5-VL-3B-Instruct',
+                      'revision': '66285546d2b821cf421d4f5eb2576359d3770cd3'},
+        })
+        fingerprint = manifest['execution_sources']
+        self.assertIn('scripts/open_vlm_pilot.py', fingerprint['files'])
+        self.assertIn('scripts/open_vlm/qwen_backend.py', fingerprint['files'])
+        self.assertIn('scripts/open_vlm/diagnostics.py', fingerprint['files'])
+        self.assertIn('scripts/open_vlm/scoring.py', fingerprint['files'])
+        self.assertIn('scripts/open_vlm/dataset.py', fingerprint['files'])
+        self.assertIn('scripts/open_vlm/__init__.py', fingerprint['files'])
+        self.assertIn('run-open-vlm.sh', fingerprint['files'])
+        self.assertIn('requirements-gpu.txt', fingerprint['files'])
+        self.assertEqual(len(fingerprint['tree_sha256']), 64)
+
+    def test_model_revision_accepts_only_immutable_commit_sha(self):
+        self.assertTrue(is_model_commit_sha('66285546d2b821cf421d4f5eb2576359d3770cd3'))
+        self.assertFalse(is_model_commit_sha('main'))
+        self.assertFalse(is_model_commit_sha('66285546d2b821cf421d4f5eb2576359d3770cd'))
+        self.assertFalse(is_model_commit_sha(None))
+
     def integer_domain(self):
         return DomainSpec(
             name='animals',
@@ -140,10 +169,15 @@ class OpenVlmSchemaTests(unittest.TestCase):
         self.assertEqual(manifest['scientific_status'], 'NEEDS_EVIDENCE')
         self.assertEqual(manifest['model']['id'], 'Qwen/Qwen2.5-VL-3B-Instruct')
         self.assertEqual(manifest['runtime']['attention'], 'sdpa')
+        self.assertTrue(manifest['runtime']['image_processor_use_fast'])
         self.assertFalse(manifest['family_split']['animals']['eligible'])
         self.assertEqual(manifest['family_split']['animals']['family_count'], 4)
         serialized = json.dumps(manifest, sort_keys=True, ensure_ascii=True)
         self.assertEqual(serialized, json.dumps(manifest, sort_keys=True, ensure_ascii=True))
+
+        config['runtime']['image_processor_use_fast'] = False
+        slow_manifest = build_manifest(rows, config)
+        self.assertFalse(slow_manifest['runtime']['image_processor_use_fast'])
 
     def test_manifest_preserves_dedicated_step0_rows(self):
         rows = [{
@@ -180,6 +214,39 @@ class OpenVlmSchemaTests(unittest.TestCase):
             'step0_bias_rows': bias_rows,
         })
         self.assertEqual(manifest['step0_bias_rows'][0]['family'], 'bias-01')
+
+    def test_manifest_preserves_diagnostic_protocol_settings(self):
+        rows = [{
+            'domain': 'animals', 'family': 'animal-01', 'ground_truth': 4,
+            'expected_bias': 5, 'image_path': 'images/animal.png',
+        }]
+        spec = {'logit_lens': {
+            'conditions': ['clear', 'black', 'blur'],
+            'sigmas': [1, 3, 6, 12],
+            'min_families': 5,
+        }}
+        manifest = build_manifest(rows, {
+            'dataset_revision': DATASET_REVISION,
+            'license_attestations': {'dataset': 'verified', 'model': 'verified'},
+            'diagnostics': spec,
+        })
+        self.assertEqual(manifest['diagnostics'], spec)
+
+    def test_manifest_registers_default_logit_lens_diagnostic(self):
+        manifest = build_manifest([{
+            'domain': 'animals', 'family': 'animal-01', 'ground_truth': 4,
+            'expected_bias': 5, 'image_path': 'images/animal.png',
+        }], {
+            'dataset_revision': DATASET_REVISION,
+            'license_attestations': {'dataset': 'verified', 'model': 'verified'},
+            'method': {'sigmas': [1, 3, 6, 12]},
+        })
+        spec = manifest['diagnostics']['logit_lens']
+        self.assertEqual(spec['conditions'], ['clear', 'black', 'blur'])
+        self.assertEqual(spec['sigmas'], [1, 3, 6, 12])
+        self.assertEqual(spec['min_families'], 5)
+        self.assertEqual(spec['candidate_pair'], ['ground_truth', 'prior_answer'])
+        self.assertTrue(spec['require_image_token_parity'])
 
     def test_calibration_row_requires_original_split_and_has_no_prior(self):
         row = validate_calibration_row({

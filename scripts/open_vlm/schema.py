@@ -3,6 +3,7 @@
 from collections import defaultdict
 from dataclasses import dataclass
 import copy
+import hashlib
 import json
 import random
 from pathlib import Path
@@ -10,6 +11,38 @@ from pathlib import Path
 DATASET_REVISION = '3761f9fd7163577534a7816c8bc1004035f2e2a0'
 DEFAULT_DATASET = 'anvo25/vlms-are-biased'
 SCIENTIFIC_STATUS = 'NEEDS_EVIDENCE'
+EXECUTION_SOURCE_FILES = (
+    'run-open-vlm.sh',
+    'scripts/open_vlm_pilot.py',
+    'scripts/open_vlm/__init__.py',
+    'scripts/open_vlm/dataset.py',
+    'scripts/open_vlm/diagnostics.py',
+    'scripts/open_vlm/qwen_backend.py',
+    'scripts/open_vlm/runner.py',
+    'scripts/open_vlm/schema.py',
+    'scripts/open_vlm/scoring.py',
+    'requirements-gpu.txt',
+)
+
+
+def is_model_commit_sha(value) -> bool:
+    return (isinstance(value, str) and len(value) == 40
+            and all(character in '0123456789abcdef' for character in value))
+
+
+def execution_source_fingerprint(root=None) -> dict:
+    root = Path(root) if root is not None else Path(__file__).resolve().parents[2]
+    files = {}
+    tree = hashlib.sha256()
+    for relative in EXECUTION_SOURCE_FILES:
+        path = root / relative
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        files[relative] = digest
+        tree.update(relative.encode('utf-8'))
+        tree.update(b'\0')
+        tree.update(digest.encode('ascii'))
+        tree.update(b'\n')
+    return {'algorithm': 'sha256', 'files': files, 'tree_sha256': tree.hexdigest()}
 
 
 @dataclass(frozen=True)
@@ -179,6 +212,18 @@ def build_manifest(rows, config):
             extra_sets[name] = [validator(row, specs[row.get('domain')]) for row in extra_rows]
 
     seed = int(config.get('seed', 0))
+    diagnostics = copy.deepcopy(config.get('diagnostics', {}))
+    diagnostic_sigmas = list(config.get('method', {}).get('sigmas', (1, 3, 6, 12)))
+    diagnostics.setdefault('logit_lens', {
+        'conditions': ['clear', 'black', 'blur'],
+        'sigmas': diagnostic_sigmas,
+        'min_families': 5,
+        'candidate_pair': ['ground_truth', 'prior_answer'],
+        'require_image_token_parity': True,
+        'interpretation': 'descriptive, non-causal',
+    })
+    runtime = copy.deepcopy(config.get('runtime', {}))
+    runtime.setdefault('image_processor_use_fast', True)
     family_split = {}
     for domain_name in sorted({row['domain'] for row in normalized}):
         domain_rows = [row for row in normalized if row['domain'] == domain_name]
@@ -198,10 +243,11 @@ def build_manifest(rows, config):
         'source_root': str(config.get('source_root', '')).replace('\\', '/'),
         'license_attestations': attestations,
         'budget_usd': config.get('budget_usd'),
+        'budget_mode': config.get('budget_mode', 'capped' if config.get('budget_usd') is not None else None),
         'seed': seed,
         'processor': config.get('processor', {}),
         'model': config.get('model', {}),
-        'runtime': config.get('runtime', {}),
+        'runtime': runtime,
         'method': {
             'sigmas': [1, 3, 6, 12],
             'alphas': [0.25, 0.5, 1.0, 2.0],
@@ -211,12 +257,15 @@ def build_manifest(rows, config):
         },
         'step0_records': config.get('step0_records'),
         'step0_calibration': bool(config.get('step0_calibration', False)),
+        'step0_excluded_families': sorted(set(config.get('step0_excluded_families', []))),
         'step0_thresholds': copy.deepcopy(config.get('step0_thresholds', {})),
         'dev_fraction': float(config.get('dev_fraction', 0.8)),
+        'diagnostics': diagnostics,
         'require_controls': bool(config.get('require_controls', False)),
         'family_split': family_split,
         'rows': sorted(normalized, key=_row_key),
         'scientific_status': SCIENTIFIC_STATUS,
         'execution_blocked': any(attestations.get(name) != 'verified' for name in ('dataset', 'model')),
+        'execution_sources': execution_source_fingerprint(),
         **extra_sets,
     }
