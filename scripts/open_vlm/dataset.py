@@ -16,6 +16,7 @@ from .schema import DATASET_REVISION, DEFAULT_DATASET, default_domain_specs, val
 
 BASE_ROWS_URL = 'https://datasets-server.huggingface.co/rows'
 PAGE_SIZE = 100
+DATASET_REQUEST_INTERVAL_SECONDS = 1.0
 DOMAIN_ALIASES = {
     'animals': 'animals',
     'animal': 'animals',
@@ -57,6 +58,21 @@ def _retry_delay(exc, attempt, backoff_seconds):
         return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
 
 
+def _paced_opener(opener, minimum_interval_seconds, clock=time.monotonic, sleep=time.sleep):
+    previous_request = [None]
+
+    def open_paced(request, timeout):
+        now = clock()
+        if previous_request[0] is not None:
+            delay = minimum_interval_seconds - (now - previous_request[0])
+            if delay > 0:
+                sleep(delay)
+        previous_request[0] = clock()
+        return opener(request, timeout=timeout)
+
+    return open_paced
+
+
 def _open_with_retry(request, opener, retries=4, backoff_seconds=1.0):
     transient = {429, 500, 502, 503, 504}
     for attempt in range(retries + 1):
@@ -74,10 +90,14 @@ def _open_with_retry(request, opener, retries=4, backoff_seconds=1.0):
 
 def fetch_rows(split='main', offsets=(0,), dataset=DEFAULT_DATASET,
                revision=DATASET_REVISION, page_size=PAGE_SIZE, opener=None,
-               retries=4, backoff_seconds=1.0):
+               retries=4, backoff_seconds=1.0, page_cache=None):
     opener = opener or urllib.request.urlopen
     rows = []
     for offset in offsets:
+        cache_key = (dataset, revision, split, offset, page_size)
+        if page_cache is not None and cache_key in page_cache:
+            rows.extend(page_cache[cache_key])
+            continue
         query = urllib.parse.urlencode({
             'dataset': dataset,
             'config': 'default',
@@ -92,7 +112,10 @@ def fetch_rows(split='main', offsets=(0,), dataset=DEFAULT_DATASET,
         )
         with _open_with_retry(request, opener, retries=retries,
                               backoff_seconds=backoff_seconds) as response:
-            rows.extend(item['row'] for item in _json_response(response).get('rows', []))
+            page = [item['row'] for item in _json_response(response).get('rows', [])]
+        if page_cache is not None:
+            page_cache[cache_key] = page
+        rows.extend(page)
     return rows
 
 
@@ -299,12 +322,13 @@ def _select_stratified_calibration_rows(rows, domain, limit, seed, excluded_fami
 
 
 def load_vlmbias_rows(domains, max_per_domain=20, page_limit=100, split='main', opener=None,
-                      seed=20261024, excluded_families=()):
+                      seed=20261024, excluded_families=(), page_cache=None):
     domains = tuple(dict.fromkeys(domain.casefold() for domain in domains))
     excluded_families = set(excluded_families)
     rows = []
     for offset in range(0, page_limit * PAGE_SIZE, PAGE_SIZE):
-        page = fetch_rows(split=split, offsets=(offset,), page_size=PAGE_SIZE, opener=opener)
+        page = fetch_rows(split=split, offsets=(offset,), page_size=PAGE_SIZE,
+                          opener=opener, page_cache=page_cache)
         if not page:
             break
         for row in page:
@@ -335,17 +359,45 @@ def load_vlmbias_rows(domains, max_per_domain=20, page_limit=100, split='main', 
     missing = [domain for domain in domains if not any(row['domain'] == domain for row in selected)]
     if missing:
         raise ValueError(f'No pinned VLMBias rows found for domains: {missing}')
+    insufficient = [
+        domain for domain in domains
+        if len({row['family'] for row in selected if row['domain'] == domain}) < max_per_domain
+    ]
+    if insufficient:
+        raise ValueError(
+            f'VLMBias split {split!r} requires {max_per_domain} distinct families per domain; '
+            f'insufficient families for: {insufficient}')
     return selected
+
+
+def _calibration_pool_ready(rows, domain, limit, excluded_families):
+    unique = {}
+    for row in rows:
+        if row['family'] not in excluded_families:
+            unique.setdefault(row['family'], row)
+    if len(unique) < limit:
+        return False
+
+    strata = {_calibration_stratum(row) for row in unique.values()}
+    if domain == 'animals':
+        minimum_per_count = (limit + 1) // 2
+        return all(sum(row.get('ground_truth') == count for row in unique.values())
+                   >= minimum_per_count for count in (2, 4))
+    if domain == 'logos':
+        return len(strata) >= min(2, limit)
+    return True
 
 
 def load_vlmbias_calibration_rows(domains=('animals', 'logos'), max_per_domain=5,
                                   page_limit=100, opener=None, seed=20261024,
-                                  excluded_families=()):
+                                  excluded_families=(), page_cache=None):
     """Load seeded, stratified, unmodified original-split rows for Step 0."""
     domains = tuple(dict.fromkeys(domain.casefold() for domain in domains))
+    excluded_families = set(excluded_families)
     rows = []
     for offset in range(0, page_limit * PAGE_SIZE, PAGE_SIZE):
-        page = fetch_rows(split='original', offsets=(offset,), page_size=PAGE_SIZE, opener=opener)
+        page = fetch_rows(split='original', offsets=(offset,), page_size=PAGE_SIZE,
+                          opener=opener, page_cache=page_cache)
         if not page:
             break
         for row in page:
@@ -357,6 +409,10 @@ def load_vlmbias_calibration_rows(domains=('animals', 'logos'), max_per_domain=5
                 continue
             if normalized['domain'] in domains:
                 rows.append(normalized)
+        if all(_calibration_pool_ready(
+                [row for row in rows if row['domain'] == domain], domain,
+                max_per_domain, excluded_families) for domain in domains):
+            break
         if len(page) < PAGE_SIZE:
             break
     selected = []
@@ -364,9 +420,14 @@ def load_vlmbias_calibration_rows(domains=('animals', 'logos'), max_per_domain=5
         domain_rows = [row for row in rows if row['domain'] == domain]
         selected.extend(_select_stratified_calibration_rows(
             domain_rows, domain, max_per_domain, seed, excluded_families))
-    missing = [domain for domain in domains if not any(row['domain'] == domain for row in selected)]
-    if missing:
-        raise ValueError(f'No original VLMBias calibration rows found for domains: {missing}')
+    insufficient = [
+        domain for domain in domains
+        if len({row['family'] for row in selected if row['domain'] == domain}) < max_per_domain
+    ]
+    if insufficient:
+        raise ValueError(
+            f'Original VLMBias calibration requires {max_per_domain} distinct families per domain; '
+            f'insufficient families for: {insufficient}')
     return selected
 
 
@@ -383,7 +444,7 @@ def download_rows(rows, run_dir, opener=None, image_subdir='images'):
         safe_family = re.sub(r'[^A-Za-z0-9_.-]+', '_', row['family'])
         path = image_dir / f'{index:04d}-{safe_family}.png'
         request = urllib.request.Request(row['image_url'], headers={'User-Agent': 'visual-prior-bias-open-vlm/1'})
-        with opener(request, timeout=60) as response:
+        with _open_with_retry(request, opener) as response:
             data = response.read()
         path.write_bytes(data)
         downloaded.append({
@@ -399,8 +460,13 @@ def prepare_vlmbias_run(root, phase, domains, config, max_per_domain=20,
                         calibration_max_per_domain=None, opener=None):
     from .runner import prepare_run
 
+    request_interval_seconds = DATASET_REQUEST_INTERVAL_SECONDS if opener is None else 0.0
+    if opener is None:
+        opener = _paced_opener(urllib.request.urlopen, request_interval_seconds)
+    page_cache = {}
     seed = int(config.get('seed', 20261024))
-    rows = load_vlmbias_rows(domains, max_per_domain=max_per_domain, opener=opener, seed=seed)
+    rows = load_vlmbias_rows(domains, max_per_domain=max_per_domain, opener=opener,
+                              seed=seed, page_cache=page_cache)
     config = dict(config)
     config['source_root'] = ''
     config['prepare_only'] = True
@@ -413,11 +479,11 @@ def prepare_vlmbias_run(root, phase, domains, config, max_per_domain=20,
         main_families = {row['family'] for row in rows}
         calibration_rows = load_vlmbias_calibration_rows(
             domains, max_per_domain=calibration_max_per_domain, opener=opener, seed=seed,
-            excluded_families=main_families)
+            excluded_families=main_families, page_cache=page_cache)
         bias_excluded_families = main_families | {row['family'] for row in calibration_rows}
         bias_rows = load_vlmbias_rows(
             domains, max_per_domain=calibration_max_per_domain, split='main', opener=opener,
-            seed=seed, excluded_families=bias_excluded_families)
+            seed=seed, excluded_families=bias_excluded_families, page_cache=page_cache)
         config['step0_excluded_families'] = sorted(main_families)
         config['step0_bias_excluded_families'] = sorted(bias_excluded_families)
         config['step0_rows'] = calibration_rows
@@ -454,6 +520,7 @@ def prepare_vlmbias_run(root, phase, domains, config, max_per_domain=20,
         'revision': DATASET_REVISION,
         'split': 'main',
         'prepared_at': datetime.now().astimezone().isoformat(),
+        'request_interval_seconds': request_interval_seconds,
     }
     manifest['license_attestations'] = config.get('license_attestations', {
         'dataset': 'pending', 'model': 'pending',

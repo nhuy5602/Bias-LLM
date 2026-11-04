@@ -94,6 +94,13 @@ execution refuses to launch while either remains pending. `--logit-lens` reports
 trajectories descriptively; it is not causal evidence and does not require a
 passing blur gate.
 
+Dataset preparation waits at least one second between live Hugging Face
+requests, reuses pages already fetched for the same pinned revision, honors
+`Retry-After`, and retries transient image-download failures. The original
+calibration scan stops once its seeded count strata have enough distinct
+families; preparation fails if exclusions leave either registered calibration
+slice below its required family count.
+
 GPU preparation and execution require `--model-revision` with an immutable
 40-character Hugging Face commit SHA. The same revision is passed to model
 weights and processor loaders. `main`, tags, or branch names are rejected so a

@@ -11,6 +11,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
+from open_vlm import dataset as dataset_module  # noqa: E402
 from open_vlm.dataset import (  # noqa: E402
     BASE_ROWS_URL,
     DATASET_REVISION,
@@ -97,6 +98,43 @@ class OpenVlmDatasetTests(unittest.TestCase):
         self.assertIn(DATASET_REVISION, urls[0])
         self.assertTrue(urls[0].startswith(BASE_ROWS_URL))
 
+    def test_fetch_rows_reuses_pinned_page_cache(self):
+        calls = []
+        cache = {}
+
+        def opener(request, timeout):
+            calls.append(request.full_url)
+            return Response(json.dumps({'rows': [{'row': self.row()}]}).encode('utf-8'))
+
+        try:
+            first = fetch_rows(offsets=(0,), page_size=1, opener=opener, page_cache=cache)
+            second = fetch_rows(offsets=(0,), page_size=1, opener=opener, page_cache=cache)
+        except TypeError as exc:
+            self.fail(f'fetch_rows does not accept a reusable page cache: {exc}')
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(calls), 1)
+
+    def test_paced_opener_waits_between_fast_requests(self):
+        paced_opener = getattr(dataset_module, '_paced_opener', None)
+        self.assertIsNotNone(paced_opener)
+        now = [0.0]
+        sleeps = []
+
+        def opener(_request, timeout):
+            now[0] += 0.25
+            return Response(b'{}')
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            now[0] += seconds
+
+        wrapped = paced_opener(opener, 1.0, clock=lambda: now[0], sleep=sleep)
+        wrapped('first', timeout=60)
+        wrapped('second', timeout=60)
+
+        self.assertEqual(sleeps, [0.75])
+
     def test_fetch_rows_retries_transient_gateway_errors(self):
         attempts = []
 
@@ -135,6 +173,30 @@ class OpenVlmDatasetTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError):
             fetch_rows(offsets=(0,), opener=opener, retries=3, backoff_seconds=0)
         self.assertEqual(len(attempts), 1)
+
+    def test_download_rows_retries_transient_image_errors(self):
+        row = normalize_row(self.row())
+        attempts = []
+        image_bytes = b'fake-image-bytes'
+
+        def opener(request, timeout):
+            attempts.append(request.full_url)
+            if len(attempts) == 1:
+                raise urllib.error.HTTPError(
+                    request.full_url, 429, 'too many requests', {'Retry-After': '0'}, None)
+            return Response(image_bytes)
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch('open_vlm.dataset.time.sleep'):
+            try:
+                downloaded = dataset_module.download_rows([row], directory, opener=opener)
+            except urllib.error.HTTPError as exc:
+                self.fail(f'image download did not retry HTTP {exc.code}')
+
+            path = Path(directory) / downloaded[0]['image_path']
+            self.assertEqual(path.read_bytes(), image_bytes)
+
+        self.assertEqual(len(attempts), 2)
 
     def test_load_rows_filters_domains_and_limits_per_domain(self):
         rows = [self.row('Animals'), self.row('Logos')]
@@ -299,6 +361,58 @@ class OpenVlmDatasetTests(unittest.TestCase):
         self.assertEqual(len({row['family'] for row in selected}), 2)
         self.assertEqual(page_calls, 2)
 
+    def test_calibration_loader_stops_when_animal_strata_are_sufficient(self):
+        rows = []
+        for index in range(5):
+            rows.append({
+                'ID': f'animal-count2-{index}_prompt1', 'topic': 'Animals',
+                'type_of_question': 'Counting/Illusion',
+                'image_path': f'original_images/count2-{index}.png',
+                'ground_truth': 2, 'expected_bias': None,
+                'image': {'src': f'https://example.test/count2-{index}.png'},
+                'metadata': '{}',
+            })
+        for index in range(5):
+            rows.append({
+                'ID': f'animal-count4-{index}_prompt1', 'topic': 'Animals',
+                'type_of_question': 'Counting/Illusion',
+                'image_path': f'original_images/count4-{index}.png',
+                'ground_truth': 4, 'expected_bias': None,
+                'image': {'src': f'https://example.test/count4-{index}.png'},
+                'metadata': '{}',
+            })
+        rows.extend(rows * 9)
+        page_calls = []
+
+        def opener(request, timeout):
+            page_calls.append(request.full_url)
+            page = rows if len(page_calls) == 1 else []
+            return Response(json.dumps({'rows': [{'row': row} for row in page]}).encode('utf-8'))
+
+        selected = load_vlmbias_calibration_rows(
+            ('animals',), max_per_domain=10, page_limit=5, opener=opener)
+
+        self.assertEqual(len(selected), 10)
+        self.assertEqual(len(page_calls), 1)
+
+    def test_calibration_loader_rejects_insufficient_families_after_exclusions(self):
+        rows = [{
+            'ID': 'animal-one_prompt1', 'topic': 'Animals',
+            'type_of_question': 'Counting/Illusion',
+            'image_path': 'original_images/animal-one.png',
+            'ground_truth': 4, 'expected_bias': None,
+            'image': {'src': 'https://example.test/animal-one.png'},
+            'metadata': '{}',
+        }]
+
+        def opener(_request, timeout):
+            return Response(json.dumps({'rows': [{'row': row} for row in rows]}).encode('utf-8'))
+
+        with self.assertRaisesRegex(ValueError, 'requires 1 distinct families'):
+            load_vlmbias_calibration_rows(
+                ('animals',), max_per_domain=1, page_limit=1, opener=opener,
+                excluded_families={'animals:animal-one'})
+
     def test_calibration_loader_excludes_alpha_development_families(self):
         rows = []
         for family, count in (
@@ -420,10 +534,14 @@ class OpenVlmDatasetTests(unittest.TestCase):
             'metadata': '{}',
         } for index in range(28)]
 
+        main_page_calls = 0
+
         def opener(request, timeout):
+            nonlocal main_page_calls
             if 'split=original' in request.full_url:
                 response_rows = original_rows
             elif request.full_url.startswith(BASE_ROWS_URL):
+                main_page_calls += 1
                 response_rows = main_rows
             else:
                 return Response(image_bytes)
@@ -458,6 +576,7 @@ class OpenVlmDatasetTests(unittest.TestCase):
         self.assertTrue(all(row['expected_bias'] is not None for row in bias_rows))
         self.assertTrue(all(row['image_path'].startswith('step0-bias-images/') for row in bias_rows))
         self.assertTrue(bias_paths_exist)
+        self.assertEqual(main_page_calls, 1)
 
 
 if __name__ == '__main__':
