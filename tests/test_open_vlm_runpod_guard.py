@@ -6,10 +6,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
-from open_vlm_runpod_guard import monitor_pod  # noqa: E402
+from open_vlm_runpod_guard import _pod_records, monitor_pod  # noqa: E402
 
 
 class OpenVlmRunpodGuardTests(unittest.TestCase):
+    def test_pod_records_accepts_runpodctl_single_pod_object(self):
+        payload = {'id': 'pod-1', 'runtimeStatus': 'initializing'}
+        self.assertEqual(_pod_records(payload), [payload])
+
     def test_guard_returns_when_stopped_pod_remains_in_list(self):
         calls = []
 
@@ -37,7 +41,9 @@ class OpenVlmRunpodGuardTests(unittest.TestCase):
         def cli(_path, *args):
             calls.append(args)
             if args == ('pod', 'list'):
-                return [{'id': 'pod-1'}] if active[0] else []
+                if active[0]:
+                    return {'id': 'pod-1', 'runtimeStatus': 'running'}
+                return {'id': 'pod-1', 'runtimeStatus': 'stopped'}
             if args == ('user',):
                 return {'clientBalance': 9.5}
             if args == ('pod', 'stop', 'pod-1'):

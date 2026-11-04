@@ -20,7 +20,11 @@ def _pod_records(payload):
     if isinstance(payload, list):
         return payload
     if isinstance(payload, dict):
-        return payload.get('pods') or []
+        pods = payload.get('pods')
+        if isinstance(pods, list):
+            return pods
+        if payload.get('id') is not None:
+            return [payload]
     return []
 
 
