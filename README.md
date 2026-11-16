@@ -63,6 +63,54 @@ một proposal round đã hoàn tất của duo.
 
 ## Open-VLM track
 
+### Visual ICL
+
+The main research track evaluates whether correctly labeled visual examples
+improve counterfactual animal counting on VLMBias. The protocol uses
+`Qwen/Qwen3-VL-32B-Instruct` at an explicitly supplied Hugging Face commit.
+The checkpoint choice follows the reported visual ICL results at 32B scale in
+[Wang et al.](https://arxiv.org/abs/2610.12942). Effectiveness on this dataset
+is an open question.
+
+```text
+python scripts/open_vlm_pilot.py --prepare-visual-icl --root RUNS_DIR --model-revision MODEL_COMMIT --gpu-cost-per-hour GPU_RATE --unlimited-budget --dataset-license verified --model-license verified
+python scripts/open_vlm_pilot.py --dry-run --run-dir RUN_DIR
+./run-open-vlm.sh visual-icl RUN_DIR
+```
+
+Attest to the licenses after checking both exact revisions. Record hardware
+and launcher settings in the run ledger before launching. Preparation and
+the dry run use zero model calls. The GPU launch uses the existing watchdog
+and artifact-retrieval contract below.
+
+- Default sample is 40 counterfactual families balanced across counts 3 and 5.
+  Family keys derive from the animal name in the dataset's source-image
+  metadata, grouping question and resolution variants before sampling. The
+  seed splits each count equally into development and held-out families.
+  The original-image check draws 20 families outside development. Original and
+  counterfactual evaluation may share a family and are scored separately.
+- Each query receives zero-shot, four correctly labeled demonstrations, and
+  the same four images with the answer labels swapped across the two groups.
+  Demonstrations come from development and are fixed in the manifest. Both
+  four-shot arms use greedy generation with the same output token limit.
+  The runner checks recorded input-token and compute parity for those arms.
+- The pilot uses the existing held-out gates. It requires at least a
+  10-point bias-rate reduction versus zero-shot, a positive paired lower
+  bound for that reduction, accuracy non-inferiority within 5 points,
+  at most a 5-point increase in other errors at the upper bound, and at most
+  5% invalid outputs. It additionally requires a positive accuracy lower
+  bound versus shuffled labels and original-image non-inferiority within
+  5 points. Paired bootstrap resampling uses source families.
+- A run records source hashes, prompts, demonstration assignments, launch
+  intents, outputs and token counts. Each run directory accepts one execution.
+  A failed or interrupted execution preserves its partial ledger.
+- A pass is exploratory and remains `NEEDS_EVIDENCE`. One context and one
+  model limit generalization. Shuffled examples can actively harm performance,
+  so improvement over zero-shot is also evaluated. Independent evidence
+  audit remains required before manuscript claims.
+
+### Blur diagnostics and contrastive decoding
+
 The `open-vlm` track is an additive Linux/GPU path for Qwen2.5-VL. It keeps
 free-generation and candidate-scoring baselines separate, validates the
 blur-as-prior assumption before contrastive decoding, and records image-token

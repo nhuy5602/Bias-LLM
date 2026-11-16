@@ -7,6 +7,8 @@ from pathlib import Path
 from .scoring import parse_free_generation, score_candidates
 from .schema import is_model_commit_sha
 
+VISUAL_ICL_MODEL_ID = 'Qwen/Qwen3-VL-32B-Instruct'
+
 
 class QwenBackend:
     def __init__(self, model=None, processor=None, manifest=None):
@@ -41,17 +43,26 @@ class QwenBackend:
             raise RuntimeError('Qwen backend requires model.revision to be a 40-character commit SHA')
         try:
             import torch
-            from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+            from transformers import AutoProcessor
+            if self.model_id == VISUAL_ICL_MODEL_ID:
+                from transformers import Qwen3VLForConditionalGeneration as Model
+            else:
+                from transformers import Qwen2_5_VLForConditionalGeneration as Model
         except ImportError as exc:
             raise RuntimeError(
                 'Qwen backend requires requirements-gpu.txt on the target Linux image') from exc
         dtype = getattr(torch, self.runtime['dtype'], torch.bfloat16)
-        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        placement = {'device_map': self.runtime['device']} if self.model_id == VISUAL_ICL_MODEL_ID else {}
+        self.model = Model.from_pretrained(
             self.model_id,
             revision=self.model_revision,
             dtype=dtype,
             attn_implementation=self.runtime['attention'],
-        ).to(self.runtime['device']).eval()
+            **placement,
+        )
+        if not placement:
+            self.model = self.model.to(self.runtime['device'])
+        self.model.eval()
         self.processor = AutoProcessor.from_pretrained(
             self.model_id,
             revision=self.model_revision,
@@ -312,6 +323,35 @@ class QwenBackend:
         generated = output_ids[:, inputs.input_ids.shape[1]:]
         return self.processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
 
+    def _visual_icl(self, task, candidates):
+        self._ensure_loaded()
+        messages = []
+        examples = task['demonstrations']
+        for row in [*examples, task]:
+            messages.append({'role': 'user', 'content': [
+                {'type': 'image', 'path': row['image']},
+                {'type': 'text', 'text': task['prompt']},
+            ]})
+            if row is not task:
+                messages.append({'role': 'assistant', 'content': [{'type': 'text', 'text': row['answer']}]})
+        inputs = self.processor.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True, return_dict=True,
+            return_tensors='pt').to(self.runtime['device'])
+        inputs.pop('token_type_ids', None)
+        prompt_length = inputs.input_ids.shape[1]
+        max_new_tokens = 16
+        outputs = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        generated = outputs[:, prompt_length:]
+        raw = self.processor.batch_decode(
+            generated, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
+        return {
+            'prediction': parse_free_generation(raw, candidates), 'raw': raw,
+            'input_token_count': prompt_length, 'max_new_tokens': max_new_tokens,
+            'generated_token_count': generated.shape[1],
+            'image_encodes': len(examples) + 1, 'forward_passes': 1,
+            'runtime': self.runtime.copy(),
+        }
+
     def _score_hf_image(self, image, candidate):
         inputs, _ = self._prepare_hf(image)
         import torch
@@ -373,6 +413,8 @@ class QwenBackend:
         prompt = task.get('prompt', self._active_prompt)
         self._active_prompt = prompt
         try:
+            if method == 'visual_icl':
+                return self._with_runtime(self._visual_icl(task, candidates), started)
             if method == 'free_generation':
                 raw = self._generate(task['image'], prompt)
                 prediction = parse_free_generation(raw, candidates) if candidates else raw

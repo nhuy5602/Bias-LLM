@@ -21,3 +21,52 @@
 2026-10-21 22:34 loaded task-observer — 0 open observations
 2026-10-21 22:34 loaded graphify — 0 open observations
 2026-10-21 22:34 loaded test-driven-development — 0 open observations
+2026-10-21 23:38 [Bias LLM] session-start scan (PowerShell fallback): files=0 parsed=0 principles=0
+2026-10-21 23:40 [Bias LLM] deliverable: feasibility self-assessment completed; no observation records created
+2026-10-24 19:45 [Bias LLM] session-start scan: files=0 parsed=0 principles=0
+2026-10-24 20:03 [Bias LLM] deliverable: addressed external open-vlm execution review; 162 tests and research constraints pass; no GPU launch
+2026-10-24 20:10 [Bias LLM] session-start scan: files=0 parsed=0
+2026-10-24 20:22 [Bias LLM] session-start scan: files=0
+2026-10-27 18:38 [Bias LLM] session-start scan: files=0 parsed=0 principles=0
+2026-10-27 18:38 loaded task-observer — 0 open observations
+2026-10-27 18:38 loaded using-superpowers — 0 open observations
+2026-10-27 18:38 loaded brainstorming — 0 open observations
+2026-10-27 18:38 loaded incremental-implementation — 0 open observations
+2026-10-27 18:38 loaded test-driven-development — 0 open observations
+2026-10-27 18:38 loaded verification-before-completion — 0 open observations
+2026-10-27 18:38 loaded systematic-debugging — 0 open observations
+2026-10-27 18:38 loaded source-driven-development — 0 open observations
+2026-10-27 18:38 loaded ponytail — 0 open observations
+2026-10-27 18:38 loaded runpod — 0 open observations
+2026-10-27 18:38 loaded runpodctl — 0 open observations
+2026-10-27 18:41 loaded task-observer — 0 open observations
+2026-10-27 18:41 loaded using-superpowers — 0 open observations
+2026-10-27 18:41 loaded brainstorming — 0 open observations
+2026-10-27 18:41 loaded incremental-implementation — 0 open observations
+2026-10-27 18:41 loaded test-driven-development — 0 open observations
+2026-10-27 18:41 loaded verification-before-completion — 0 open observations
+2026-10-27 18:41 loaded systematic-debugging — 0 open observations
+2026-10-27 18:41 loaded source-driven-development — 0 open observations
+2026-10-27 18:41 loaded ponytail — 0 open observations
+2026-10-27 18:41 loaded runpod — 0 open observations
+2026-10-27 18:41 loaded runpodctl — 0 open observations
+2026-10-27 23:14 [Bias LLM] session-start scan: files=0 parsed=0 principles=0
+2026-10-27 23:39 [Bias LLM] session-start scan: files=0 parsed=0 principles=0
+2026-10-27 23:53 [Bias LLM] session-start scan: files=0 parsed=0 principles=0
+2026-10-27 23:56 loaded task-observer — 0 open observations
+2026-10-27 23:56 loaded using-agent-skills — 0 open observations
+2026-10-27 23:56 loaded api-and-interface-design — 0 open observations
+2026-10-27 23:56 loaded source-driven-development — 0 open observations
+2026-10-27 23:56 loaded systematic-debugging — 0 open observations
+2026-10-27 23:56 loaded test-driven-development — 0 open observations
+2026-10-27 23:56 loaded git-workflow-and-versioning — 0 open observations
+2026-10-27 23:57 loaded ponytail — 0 open observations
+2026-10-31 18:51 [Bias LLM] session-start scan: files=0 parsed=0 principles=0
+2026-10-31 20:54 loaded task-observer — 0 open observations
+2026-10-31 20:54 loaded source-driven-development — 0 open observations
+2026-10-31 20:54 loaded test-driven-development — 0 open observations
+2026-10-31 20:54 loaded incremental-implementation — 0 open observations
+2026-10-31 20:54 loaded api-and-interface-design — 0 open observations
+2026-11-16 18:57 [Bias LLM] session-start scan: files=0 parsed=0 principles=0
+2026-11-16 [Bias LLM] checkpoint: no observations after local evidence review
+2026-11-16 [Bias LLM] deliverable flush: feasibility reassessment complete; observations 1-2 logged

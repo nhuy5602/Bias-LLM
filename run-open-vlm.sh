@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 <smoke|development|held-out|no-regression|logit-lens> <run-dir>" >&2
+  echo "usage: $0 <visual-icl|smoke|development|held-out|no-regression|logit-lens> <run-dir>" >&2
 }
 
 if [[ $# -ne 2 ]]; then
@@ -28,7 +28,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 WATCHDOG_PID=""
 
 case "$PHASE" in
-  smoke|development|held-out|no-regression|logit-lens) ;;
+  visual-icl|smoke|development|held-out|no-regression|logit-lens) ;;
   *) echo "unsupported phase: $PHASE" >&2; exit 2 ;;
 esac
 
@@ -134,6 +134,7 @@ if [[ -n "${OPEN_VLM_COMMAND:-}" ]]; then
   COMMAND=("$OPEN_VLM_COMMAND" "$PHASE" "$RUN_DIR")
 else
   case "$PHASE" in
+    visual-icl) PHASE_FLAG="--visual-icl" ;;
     smoke) PHASE_FLAG="--smoke" ;;
     development) PHASE_FLAG="--development" ;;
     held-out) PHASE_FLAG="--held-out" ;;

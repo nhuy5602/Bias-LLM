@@ -370,6 +370,43 @@ def load_vlmbias_rows(domains, max_per_domain=20, page_limit=100, split='main', 
     return selected
 
 
+def visual_icl_animal_family(row):
+    source_image = (row.get('metadata') or {}).get('source_image')
+    if not isinstance(source_image, str):
+        raise ValueError('Visual ICL requires the VLMBias source_image metadata')
+    stem = Path(source_image).stem.casefold()
+    animal = re.sub(r'(?:_\d+)+$', '', stem)
+    animal = re.sub(r'[^a-z0-9]', '', animal)
+    if not animal:
+        raise ValueError('Visual ICL source_image has no animal family name')
+    return f'animals:{animal}'
+
+
+def load_visual_icl_rows(limit, seed, opener, page_cache):
+    """Collect equal numbers of 3-leg and 5-leg source families."""
+    strata = {3: {}, 5: {}}
+    seen_families = set()
+    per_label = limit // 2
+    for offset in range(0, 100 * PAGE_SIZE, PAGE_SIZE):
+        page = fetch_rows(offsets=(offset,), opener=opener, page_cache=page_cache)
+        for raw in page:
+            if infer_domain(raw) != 'animals':
+                continue
+            row = normalize_row(raw)
+            label = row['ground_truth']
+            family = visual_icl_animal_family(row)
+            if label in strata and row['expected_bias'] != label and family not in seen_families:
+                strata[label][family] = {**row, 'family': family}
+                seen_families.add(family)
+        if all(len(families) >= per_label for families in strata.values()) or len(page) < PAGE_SIZE:
+            break
+    if any(len(families) < per_label for families in strata.values()):
+        raise ValueError(f'Visual ICL needs {per_label} distinct families for each counterfactual label (3, 5)')
+    rng = random.Random(seed)
+    return [families[family] for families in strata.values()
+            for family in rng.sample(sorted(families), per_label)]
+
+
 def _calibration_pool_ready(rows, domain, limit, excluded_families):
     unique = {}
     for row in rows:
@@ -390,7 +427,7 @@ def _calibration_pool_ready(rows, domain, limit, excluded_families):
 
 def load_vlmbias_calibration_rows(domains=('animals', 'logos'), max_per_domain=5,
                                   page_limit=100, opener=None, seed=20261024,
-                                  excluded_families=(), page_cache=None):
+                                  excluded_families=(), page_cache=None, family_key=None):
     """Load seeded, stratified, unmodified original-split rows for Step 0."""
     domains = tuple(dict.fromkeys(domain.casefold() for domain in domains))
     excluded_families = set(excluded_families)
@@ -408,6 +445,8 @@ def load_vlmbias_calibration_rows(domains=('animals', 'logos'), max_per_domain=5
             except (TypeError, ValueError):
                 continue
             if normalized['domain'] in domains:
+                if family_key is not None:
+                    normalized['family'] = family_key(normalized)
                 rows.append(normalized)
         if all(_calibration_pool_ready(
                 [row for row in rows if row['domain'] == domain], domain,
@@ -459,34 +498,48 @@ def download_rows(rows, run_dir, opener=None, image_subdir='images'):
 def prepare_vlmbias_run(root, phase, domains, config, max_per_domain=20,
                         calibration_max_per_domain=None, opener=None):
     from .runner import prepare_run
+    from .visual_icl import PHASE as VISUAL_ICL_PHASE, stratified_split, register_visual_icl
 
     request_interval_seconds = DATASET_REQUEST_INTERVAL_SECONDS if opener is None else 0.0
     if opener is None:
         opener = _paced_opener(urllib.request.urlopen, request_interval_seconds)
     page_cache = {}
     seed = int(config.get('seed', 20261024))
-    rows = load_vlmbias_rows(domains, max_per_domain=max_per_domain, opener=opener,
-                              seed=seed, page_cache=page_cache)
+    visual_icl = phase == VISUAL_ICL_PHASE
+    if visual_icl:
+        if (list(domains) != ['animals'] or max_per_domain < 40 or max_per_domain % 4
+                or (calibration_max_per_domain or 0) < 20):
+            raise ValueError('Visual ICL requires animals, a multiple of 4 main families (minimum 40), and 20+ originals')
+        rows = load_visual_icl_rows(max_per_domain, seed, opener, page_cache)
+    else:
+        rows = load_vlmbias_rows(domains, max_per_domain=max_per_domain, opener=opener,
+                                 seed=seed, page_cache=page_cache)
     config = dict(config)
     config['source_root'] = ''
     config['prepare_only'] = True
     config['require_controls'] = True
-    if calibration_max_per_domain:
+    if visual_icl:
+        config['dev_fraction'] = 0.5
+    elif calibration_max_per_domain:
         config['dev_fraction'] = min(float(config.get('dev_fraction', 0.8)), 0.75)
     calibration_rows = []
     bias_rows = []
     if calibration_max_per_domain:
         main_families = {row['family'] for row in rows}
+        excluded_from_originals = (set(stratified_split(rows, seed)['dev_families'])
+                                   if visual_icl else main_families)
         calibration_rows = load_vlmbias_calibration_rows(
             domains, max_per_domain=calibration_max_per_domain, opener=opener, seed=seed,
-            excluded_families=main_families, page_cache=page_cache)
+            excluded_families=excluded_from_originals, page_cache=page_cache,
+            **({'family_key': visual_icl_animal_family} if visual_icl else {}))
+        config['step0_rows'] = calibration_rows
+    if calibration_max_per_domain and not visual_icl:
         bias_excluded_families = main_families | {row['family'] for row in calibration_rows}
         bias_rows = load_vlmbias_rows(
             domains, max_per_domain=calibration_max_per_domain, split='main', opener=opener,
             seed=seed, excluded_families=bias_excluded_families, page_cache=page_cache)
         config['step0_excluded_families'] = sorted(main_families)
         config['step0_bias_excluded_families'] = sorted(bias_excluded_families)
-        config['step0_rows'] = calibration_rows
         config['step0_bias_rows'] = bias_rows
         config['step0_calibration'] = True
         config['step0_thresholds'] = {
@@ -515,6 +568,8 @@ def prepare_vlmbias_run(root, phase, domains, config, max_per_domain=20,
         manifest['step0_bias_rows'] = downloaded_bias
     if calibration_rows:
         manifest['step0_rows'] = downloaded_calibration
+    if visual_icl:
+        register_visual_icl(manifest)
     manifest['prepared_from'] = {
         'dataset': DEFAULT_DATASET,
         'revision': DATASET_REVISION,

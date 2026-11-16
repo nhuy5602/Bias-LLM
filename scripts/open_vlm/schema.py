@@ -22,6 +22,7 @@ EXECUTION_SOURCE_FILES = (
     'scripts/open_vlm_runpod_guard.py',
     'scripts/open_vlm/schema.py',
     'scripts/open_vlm/scoring.py',
+    'scripts/open_vlm/visual_icl.py',
     'requirements-gpu.txt',
 )
 

@@ -22,6 +22,8 @@ def build_backend_task(row, sigma=3, alpha=1.0, artifact_dir=None, condition='cl
     task = dict(row)
     task['image_path'] = str(row.get('image_path', '')).replace('\\', '/')
     task['candidates'] = [str(value) for value in row.get('candidate_values', range(21))]
+    if 'demonstrations' in row:
+        return task
     task['alpha'] = float(alpha)
     task['sigma'] = sigma
     task['condition'] = condition
@@ -124,7 +126,7 @@ def _checkpoint_task(artifact_dir, method, result, attempts, failures):
 
 def _run_tasks(rows, backend, method, limit=None, max_retries=0, dry_run=False,
                artifact_dir=None, sigma=3, alpha=1.0, condition='clear', source_root=None,
-               formula='clear_minus_alpha_prior'):
+               formula='clear_minus_alpha_prior', record_intent=False, stop_on_error=False):
     rows = list(rows[:limit] if limit is not None else rows)
     if dry_run:
         return [], 0, []
@@ -143,6 +145,10 @@ def _run_tasks(rows, backend, method, limit=None, max_retries=0, dry_run=False,
         task.setdefault('task_id', f'task-{index:05}')
         for attempt in range(1, max_retries + 2):
             attempts += 1
+            if record_intent and artifact_dir is not None:
+                intent = artifact_dir / 'logs' / method / task['task_id'] / str(attempt) / 'intent.json'
+                _write_json(intent, {**task, 'method': method, 'attempt': attempt,
+                                     'started_at': datetime.now().astimezone().isoformat()})
             try:
                 result = {
                     **task,
@@ -151,19 +157,20 @@ def _run_tasks(rows, backend, method, limit=None, max_retries=0, dry_run=False,
                     'method': method,
                     'attempt': attempt,
                 }
-                results.append(result)
-                if not _checkpoint_task(artifact_dir, method, result, attempts, failures):
-                    failures.append({'task_id': task['task_id'], 'method': method, 'error': 'budget exceeded'})
-                    return results, attempts, failures
-                break
             except Exception as exc:
-                attempt_result = {**task, 'method': method, 'attempt': attempt,
-                                  'prediction': None, 'error': str(exc)}
-                _checkpoint_task(artifact_dir, method, attempt_result, attempts, failures)
-                if attempt > max_retries:
-                    failures.append({'task_id': task['task_id'], 'method': method, 'error': str(exc)})
-                    result = attempt_result
-                    results.append(result)
+                result = {**task, 'method': method, 'attempt': attempt, 'prediction': None,
+                          'error': str(exc) or type(exc).__name__}
+            if not _checkpoint_task(artifact_dir, method, result, attempts, failures):
+                failures.append({'task_id': task['task_id'], 'method': method, 'error': 'budget exceeded'})
+                return results + [result], attempts, failures
+            if result.get('error'):
+                if attempt <= max_retries:
+                    continue
+                failures.append({'task_id': task['task_id'], 'method': method, 'error': result['error']})
+                if stop_on_error:
+                    return results + [result], attempts, failures
+            results.append(result)
+            break
     return results, attempts, failures
 
 
