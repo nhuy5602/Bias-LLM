@@ -140,10 +140,12 @@ def _run_tasks(rows, backend, method, limit=None, max_retries=0, dry_run=False,
                 failures.append({'task_id': row.get('task_id', f'task-{index:05}'),
                                  'method': method, 'error': 'budget exceeded'})
                 break
-        task = build_backend_task(row, sigma=sigma, alpha=alpha, artifact_dir=artifact_dir,
+        resume_attempt = int(row.get('_resume_attempt', 0) or 0)
+        task_row = {key: value for key, value in row.items() if key != '_resume_attempt'}
+        task = build_backend_task(task_row, sigma=sigma, alpha=alpha, artifact_dir=artifact_dir,
                                   condition=condition, source_root=source_root, formula=formula)
         task.setdefault('task_id', f'task-{index:05}')
-        for attempt in range(1, max_retries + 2):
+        for attempt in range(resume_attempt + 1, resume_attempt + max_retries + 2):
             attempts += 1
             if record_intent and artifact_dir is not None:
                 intent = artifact_dir / 'logs' / method / task['task_id'] / str(attempt) / 'intent.json'

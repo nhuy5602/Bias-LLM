@@ -13,13 +13,21 @@ from .schema import DATASET_REVISION, SCIENTIFIC_STATUS, split_families
 from .scoring import classify_answer, cluster_bootstrap_delta, evaluate_gate, summarize_clustered
 
 PHASE = 'visual-icl'
-MIN_FAMILIES = 40
+MIN_FAMILIES = 20
 CONTEXT_COUNT = 4
 DEMONSTRATIONS_PER_LABEL = 2
 COUNTERFACTUAL_ARMS = ('zero_shot', 'answer_space_control', 'visual_icl', 'shuffled_labels')
 ORIGINAL_ARMS = ('zero_shot', 'visual_icl', 'shuffled_labels')
 PROMPT = 'How many legs are visible on this animal? Return only the integer.'
 ANSWER_SPACE_PROMPT = f'{PROMPT} The answer is either 3 or 5.'
+REGISTRATION = {
+    'status': 'proposal',
+    'expected_counterfactual_accuracy_gain': 0.15,
+    'minimum_bias_rate_reduction': 0.10,
+    'maximum_original_accuracy_loss': 0.05,
+    'scope_limit': '20 held-out source families in the pinned VLMBias 3-vs-5 animal pilot',
+    'provenance': 'hypothesis informed by Wang et al. (2026), arXiv:2610.12942',
+}
 
 
 def stratified_split(rows, seed):
@@ -46,7 +54,7 @@ def build_visual_icl_contexts(rows, dev_families, seed):
     pools = {label: sorted(set(by_label[label])) for label in labels}
     for values in pools.values():
         rng.shuffle(values)
-    orders = list(set(permutations((3, 3, 5, 5))))
+    orders = sorted(set(permutations((3, 3, 5, 5))))
     rng.shuffle(orders)
     contexts = []
     for index, order in enumerate(orders[:CONTEXT_COUNT]):
@@ -69,6 +77,7 @@ def register_visual_icl(manifest):
     manifest['family_split']['animals'].update(split)
     manifest['visual_icl_contexts'] = build_visual_icl_contexts(
         rows, split['dev_families'], manifest['seed'])
+    manifest['visual_icl_registration'] = REGISTRATION
     manifest.pop('visual_icl_demo_families', None)
 
 
@@ -102,6 +111,8 @@ def _registered_inputs(manifest, run_dir):
     expected_contexts = build_visual_icl_contexts(rows, dev, manifest['seed'])
     if manifest.get('visual_icl_contexts') != expected_contexts:
         raise ValueError('Visual ICL contexts differ from their registered deterministic selection')
+    if manifest.get('visual_icl_registration') != REGISTRATION:
+        raise ValueError('Visual ICL registration differs from the preregistered protocol')
 
     paths = {}
     seen_hashes = set()

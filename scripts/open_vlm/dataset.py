@@ -90,24 +90,28 @@ def _open_with_retry(request, opener, retries=4, backoff_seconds=1.0):
 
 def fetch_rows(split='main', offsets=(0,), dataset=DEFAULT_DATASET,
                revision=DATASET_REVISION, page_size=PAGE_SIZE, opener=None,
-               retries=4, backoff_seconds=1.0, page_cache=None):
+               retries=4, backoff_seconds=1.0, page_cache=None, where=None):
     opener = opener or urllib.request.urlopen
     rows = []
     for offset in offsets:
-        cache_key = (dataset, revision, split, offset, page_size)
+        cache_key = (dataset, revision, split, offset, page_size, where)
         if page_cache is not None and cache_key in page_cache:
             rows.extend(page_cache[cache_key])
             continue
-        query = urllib.parse.urlencode({
+        query_values = {
             'dataset': dataset,
             'config': 'default',
             'revision': revision,
             'split': split,
             'offset': offset,
             'length': page_size,
-        })
+        }
+        if where is not None:
+            query_values['where'] = where
+        query = urllib.parse.urlencode(query_values)
+        endpoint = 'filter' if where is not None else 'rows'
         request = urllib.request.Request(
-            f'{BASE_ROWS_URL}?{query}',
+            f'https://datasets-server.huggingface.co/{endpoint}?{query}',
             headers={'User-Agent': 'visual-prior-bias-open-vlm/1'},
         )
         with _open_with_retry(request, opener, retries=retries,
@@ -387,21 +391,23 @@ def load_visual_icl_rows(limit, seed, opener, page_cache):
     strata = {3: {}, 5: {}}
     seen_families = set()
     per_label = limit // 2
-    for offset in range(0, 100 * PAGE_SIZE, PAGE_SIZE):
-        page = fetch_rows(offsets=(offset,), opener=opener, page_cache=page_cache)
-        for raw in page:
-            if infer_domain(raw) != 'animals':
-                continue
-            row = normalize_row(raw)
-            label = row['ground_truth']
-            family = visual_icl_animal_family(row)
-            if label in strata and row['expected_bias'] != label and family not in seen_families:
-                strata[label][family] = {**row, 'family': family}
-                seen_families.add(family)
-        if all(len(families) >= per_label for families in strata.values()) or len(page) < PAGE_SIZE:
-            break
+    for label in sorted(strata):
+        where = f'"topic" = \'Animals\' AND "ground_truth" = {label}'
+        for offset in range(0, 100 * PAGE_SIZE, PAGE_SIZE):
+            page = fetch_rows(offsets=(offset,), opener=opener, page_cache=page_cache, where=where)
+            for raw in page:
+                row = normalize_row(raw)
+                family = visual_icl_animal_family(row)
+                if row['ground_truth'] == label and row['expected_bias'] != label and family not in seen_families:
+                    strata[label][family] = {**row, 'family': family}
+                    seen_families.add(family)
+            if len(strata[label]) >= per_label or len(page) < PAGE_SIZE:
+                break
     if any(len(families) < per_label for families in strata.values()):
-        raise ValueError(f'Visual ICL needs {per_label} distinct families for each counterfactual label (3, 5)')
+        available = {label: len(families) for label, families in strata.items()}
+        raise ValueError(
+            f'Visual ICL needs {per_label} distinct families for each counterfactual label (3, 5); '
+            f'found {available}')
     rng = random.Random(seed)
     return [families[family] for families in strata.values()
             for family in rng.sample(sorted(families), per_label)]
@@ -427,14 +433,14 @@ def _calibration_pool_ready(rows, domain, limit, excluded_families):
 
 def load_vlmbias_calibration_rows(domains=('animals', 'logos'), max_per_domain=5,
                                   page_limit=100, opener=None, seed=20261024,
-                                  excluded_families=(), page_cache=None, family_key=None):
+                                  excluded_families=(), page_cache=None, family_key=None, where=None):
     """Load seeded, stratified, unmodified original-split rows for Step 0."""
     domains = tuple(dict.fromkeys(domain.casefold() for domain in domains))
     excluded_families = set(excluded_families)
     rows = []
     for offset in range(0, page_limit * PAGE_SIZE, PAGE_SIZE):
         page = fetch_rows(split='original', offsets=(offset,), page_size=PAGE_SIZE,
-                          opener=opener, page_cache=page_cache)
+                          opener=opener, page_cache=page_cache, where=where)
         if not page:
             break
         for row in page:
@@ -531,7 +537,8 @@ def prepare_vlmbias_run(root, phase, domains, config, max_per_domain=20,
         calibration_rows = load_vlmbias_calibration_rows(
             domains, max_per_domain=calibration_max_per_domain, opener=opener, seed=seed,
             excluded_families=excluded_from_originals, page_cache=page_cache,
-            **({'family_key': visual_icl_animal_family} if visual_icl else {}))
+            **({'family_key': visual_icl_animal_family, 'where': '"topic" = \'Animals\''}
+               if visual_icl else {}))
         config['step0_rows'] = calibration_rows
     if calibration_max_per_domain and not visual_icl:
         bias_excluded_families = main_families | {row['family'] for row in calibration_rows}

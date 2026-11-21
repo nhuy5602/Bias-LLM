@@ -27,6 +27,7 @@ class QwenBackend:
             'device': runtime_config.get('device', 'cuda'),
             'dtype': runtime_config.get('dtype', 'bfloat16'),
             'attention': runtime_config.get('attention', 'sdpa'),
+            'min_gpu_memory_gb': float(runtime_config.get('min_gpu_memory_gb', 0) or 0),
             'image_processor_use_fast': bool(runtime_config.get('image_processor_use_fast', True)),
         }
         self._active_prompt = 'Return only the requested answer.'
@@ -51,8 +52,10 @@ class QwenBackend:
         except ImportError as exc:
             raise RuntimeError(
                 'Qwen backend requires requirements-gpu.txt on the target Linux image') from exc
+        if self.model_id == VISUAL_ICL_MODEL_ID:
+            self._require_visual_icl_gpu_capacity(torch)
         dtype = getattr(torch, self.runtime['dtype'], torch.bfloat16)
-        placement = {'device_map': self.runtime['device']} if self.model_id == VISUAL_ICL_MODEL_ID else {}
+        placement = {'device_map': 'auto'} if self.model_id == VISUAL_ICL_MODEL_ID else {}
         self.model = Model.from_pretrained(
             self.model_id,
             revision=self.model_revision,
@@ -72,6 +75,23 @@ class QwenBackend:
         )
         self.runtime['transformers_version'] = _package_version('transformers')
         self.runtime['torch_version'] = _package_version('torch')
+
+    def _require_visual_icl_gpu_capacity(self, torch):
+        minimum = self.runtime['min_gpu_memory_gb'] or 80.0
+        cuda = getattr(torch, 'cuda', None)
+        if (not str(self.runtime['device']).startswith('cuda') or cuda is None
+                or not cuda.is_available()):
+            raise RuntimeError(f'Visual ICL requires a CUDA GPU with at least {minimum:g} GB of memory')
+        count = int(cuda.device_count())
+        capacities = [float(cuda.get_device_properties(index).total_memory) / 1024**3
+                      for index in range(count)]
+        if not capacities or max(capacities) < minimum:
+            observed = max(capacities, default=0.0)
+            raise RuntimeError(
+                f'Visual ICL requires a CUDA GPU with at least {minimum:g} GB of memory; '
+                f'largest detected GPU has {observed:.1f} GB')
+        self.runtime['gpu_device_count'] = count
+        self.runtime['largest_gpu_memory_gb'] = max(capacities)
 
     @staticmethod
     def _image_token_count(image):

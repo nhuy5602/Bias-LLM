@@ -73,41 +73,49 @@ The checkpoint choice follows the reported visual ICL results at 32B scale in
 is an open question.
 
 ```text
-python scripts/open_vlm_pilot.py --prepare-visual-icl --root RUNS_DIR --model-revision MODEL_COMMIT --gpu-cost-per-hour GPU_RATE --unlimited-budget --dataset-license verified --model-license verified
+python scripts/open_vlm_pilot.py --prepare-visual-icl --root RUNS_DIR --model-revision MODEL_COMMIT --gpu-cost-per-hour GPU_RATE --unlimited-budget --dataset-license pending --model-license pending
 python scripts/open_vlm_pilot.py --dry-run --run-dir RUN_DIR
-./run-open-vlm.sh visual-icl RUN_DIR
+OPEN_VLM_SPEND_CAP_USD=YOUR_SPEND_CAP_USD ./run-open-vlm.sh visual-icl RUN_DIR
 ```
 
-Attest to the licenses after checking both exact revisions. Record hardware
-and launcher settings in the run ledger before launching. Preparation and
-the dry run use zero model calls. The GPU launch uses the existing watchdog
-and artifact-retrieval contract below.
+The first command produces a blocked preparation. Prepare a new immutable run
+with `verified` attestations only after recording the exact dataset and model
+license evidence in the run ledger. The [Qwen model card](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct)
+declares Apache-2.0 for the 32B checkpoint. The manifest requires one CUDA GPU with at least 80 GB
+VRAM before weights load. The launcher requires an explicit
+`OPEN_VLM_SPEND_CAP_USD` for every pod run and records its result with the
+existing watchdog and artifact-retrieval contract.
 
 - Default sample is 40 counterfactual families balanced across counts 3 and 5.
   Family keys derive from the animal name in the dataset's source-image
   metadata, grouping question and resolution variants before sampling. The
-  seed splits each count equally into development and held-out families.
+  seed splits each count equally into 20 development and 20 held-out families.
   The original-image check draws 20 families outside development. Original and
   counterfactual evaluation may share a family and are scored separately.
-- Each query receives zero-shot, four correctly labeled demonstrations, and
-  the same four images with the answer labels swapped across the two groups.
-  Demonstrations come from development and are fixed in the manifest. Both
-  four-shot arms use greedy generation with the same output token limit.
-  The runner checks recorded input-token and compute parity for those arms.
+- Four deterministic contexts each contain two count-3 and two count-5
+  demonstrations. They draw distinct development families and use varied label
+  orders. Each counterfactual query receives zero-shot, an answer-space
+  control, correct visual ICL, and shuffled-label ICL. Each original query
+  receives zero-shot, correct visual ICL, and shuffled-label ICL. The two
+  four-shot arms use greedy generation with the same output token limit. The
+  runner checks recorded input-token and compute parity for those arms.
 - The pilot uses the existing held-out gates. It requires at least a
   10-point bias-rate reduction versus zero-shot, a positive paired lower
   bound for that reduction, accuracy non-inferiority within 5 points,
   at most a 5-point increase in other errors at the upper bound, and at most
   5% invalid outputs. It additionally requires a positive accuracy lower
-  bound versus shuffled labels and original-image non-inferiority within
-  5 points. Paired bootstrap resampling uses source families.
+  bound versus shuffled labels and the answer-space control, plus
+  original-image non-inferiority within 5 points. The registration records a
+  15-point counterfactual accuracy-gain hypothesis and a 10-point minimum
+  bias-rate reduction. Paired bootstrap resampling uses source families.
 - A run records source hashes, prompts, demonstration assignments, launch
-  intents, outputs and token counts. Each run directory accepts one execution.
-  A failed or interrupted execution preserves its partial ledger.
-- A pass is exploratory and remains `NEEDS_EVIDENCE`. One context and one
-  model limit generalization. Shuffled examples can actively harm performance,
-  so improvement over zero-shot is also evaluated. Independent evidence
-  audit remains required before manuscript claims.
+  intents, outputs and token counts. Completed tasks are reused on a later
+  invocation. Failed or interrupted tasks receive the next attempt number and
+  preserve earlier intent and result records.
+- A pass is exploratory and remains `NEEDS_EVIDENCE`. The protocol evaluates
+  one model, one domain and 20 held-out source families. The loader fails before
+  image download if the pinned revision cannot supply those families. Independent
+  evidence audit remains required before manuscript claims.
 
 ### Blur diagnostics and contrastive decoding
 

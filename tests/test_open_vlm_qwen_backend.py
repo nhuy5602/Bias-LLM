@@ -193,6 +193,57 @@ class OpenVlmQwenBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '80 GB'):
                 backend._ensure_loaded()
 
+    def test_visual_icl_uses_auto_device_map_after_hardware_preflight(self):
+        class FakeCuda:
+            @staticmethod
+            def is_available():
+                return True
+
+            @staticmethod
+            def device_count():
+                return 1
+
+            @staticmethod
+            def get_device_properties(_index):
+                return type('Properties', (), {'total_memory': 80 * 1024**3})()
+
+        class FakeModel:
+            def eval(self):
+                return self
+
+        torch = ModuleType('torch')
+        torch.bfloat16 = object()
+        torch.cuda = FakeCuda()
+        model_calls = []
+        processor_calls = []
+
+        class ModelLoader:
+            @staticmethod
+            def from_pretrained(*_args, **kwargs):
+                model_calls.append(kwargs)
+                return FakeModel()
+
+        class ProcessorLoader:
+            @staticmethod
+            def from_pretrained(*_args, **kwargs):
+                processor_calls.append(kwargs)
+                return object()
+
+        transformers = ModuleType('transformers')
+        transformers.AutoProcessor = ProcessorLoader
+        transformers.Qwen3VLForConditionalGeneration = ModelLoader
+        with patch.dict(sys.modules, {'torch': torch, 'transformers': transformers}), \
+             patch('open_vlm.qwen_backend._package_version', return_value='4.57.6'):
+            backend = QwenBackend(manifest={
+                'model': {'id': VISUAL_ICL_MODEL_ID, 'revision': 'a' * 40},
+                'runtime': {'device': 'cuda', 'min_gpu_memory_gb': 80},
+            })
+            backend._ensure_loaded()
+
+        self.assertEqual(model_calls[0]['device_map'], 'auto')
+        self.assertEqual(backend.runtime['largest_gpu_memory_gb'], 80.0)
+        self.assertEqual(processor_calls[0]['revision'], 'a' * 40)
+
     def backend(self):
         return QwenBackend(
             model=FakeQwenModel(),

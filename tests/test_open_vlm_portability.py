@@ -253,8 +253,8 @@ class OpenVlmPortabilityTests(unittest.TestCase):
                 ])
         self.assertEqual(result, 0)
         self.assertEqual(prepare.call_args.args[1], 'visual-icl')
-        self.assertEqual(prepare.call_args.kwargs['max_per_domain'], 80)
-        self.assertEqual(prepare.call_args.kwargs['calibration_max_per_domain'], 40)
+        self.assertEqual(prepare.call_args.kwargs['max_per_domain'], 40)
+        self.assertEqual(prepare.call_args.kwargs['calibration_max_per_domain'], 20)
         self.assertEqual(prepare.call_args.args[3]['runtime']['min_gpu_memory_gb'], 80)
 
     def test_prepared_manifest_fingerprint_matches_current_execution_source(self):

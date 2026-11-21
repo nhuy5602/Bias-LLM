@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 import open_vlm_pilot
 from open_vlm.schema import DATASET_REVISION, execution_source_fingerprint
-from open_vlm.dataset import load_visual_icl_rows, visual_icl_animal_family
+from open_vlm.dataset import (load_visual_icl_rows, load_vlmbias_calibration_rows,
+                              visual_icl_animal_family)
 from open_vlm.qwen_backend import QwenBackend
 from open_vlm.visual_icl import CONTEXT_COUNT, MIN_FAMILIES, register_visual_icl
 
@@ -38,19 +39,56 @@ class FakeBackend:
 
 
 class VisualIclTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def small_protocol(self):
+        with patch('open_vlm.visual_icl.MIN_FAMILIES', 2), \
+             patch('open_vlm.visual_icl.CONTEXT_COUNT', 1):
+            yield
+
     def test_dataset_loader_crosses_single_label_pages_and_deduplicates_families(self):
         def source(family, truth):
             return {'ID': family, 'topic': 'Animals', 'image_path': f'{family}_384.png',
                     'metadata': {'source_image': f'{family}_0_1_384.png'}, 'ground_truth': truth,
                     'expected_bias': truth - 1}
 
-        with patch('open_vlm.dataset.fetch_rows', side_effect=[
-            [source('mammal-a', 5)] * 99 + [source('mammal-b', 5)],
-            [source('bird-a', 3), source('bird-b', 3)],
-        ]):
+        def fetch_rows(*, where, **_kwargs):
+            if where.endswith('= 3'):
+                return [source('bird-a', 3), source('bird-b', 3)]
+            return [source('mammal-a', 5)] * 99 + [source('mammal-b', 5)]
+
+        with patch('open_vlm.dataset.fetch_rows', side_effect=fetch_rows):
             rows = load_visual_icl_rows(4, 42, None, None)
         self.assertEqual(sorted(row['ground_truth'] for row in rows), [3, 3, 5, 5])
         self.assertEqual(len({row['family'] for row in rows}), 4)
+
+    def test_dataset_loader_filters_for_animals_before_paging(self):
+        requests = []
+
+        def fetch_rows(*, offsets, where, **_kwargs):
+            requests.append((offsets, where))
+            return []
+
+        with patch('open_vlm.dataset.fetch_rows', side_effect=fetch_rows):
+            with self.assertRaisesRegex(ValueError, 'distinct families'):
+                load_visual_icl_rows(4, 42, None, {})
+        self.assertEqual(requests, [
+            ((0,), '"topic" = \'Animals\' AND "ground_truth" = 3'),
+            ((0,), '"topic" = \'Animals\' AND "ground_truth" = 5'),
+        ])
+
+    def test_original_loader_filters_for_animals_before_paging(self):
+        requests = []
+
+        def fetch_rows(*, offsets, where, **_kwargs):
+            requests.append((offsets, where))
+            return []
+
+        with patch('open_vlm.dataset.fetch_rows', side_effect=fetch_rows):
+            with self.assertRaisesRegex(ValueError, 'Original VLMBias calibration'):
+                load_vlmbias_calibration_rows(
+                    ('animals',), max_per_domain=2, opener=None, page_cache={},
+                    family_key=visual_icl_animal_family, where='"topic" = \'Animals\'')
+        self.assertEqual(requests, [((0,), '"topic" = \'Animals\'')])
 
     def test_visual_icl_family_ignores_question_resolution_and_original_split(self):
         rows = [
@@ -94,7 +132,7 @@ class VisualIclTests(unittest.TestCase):
         self.assertEqual(result['image_encodes'], 2)
         self.assertEqual(result['input_token_count'], 27)
 
-    def prepare(self, run_dir):
+    def prepare(self, run_dir, per_label=20, original_count=20):
         def row(family, truth, prior, split='main'):
             name = f'{family}.png'
             content = name.encode()
@@ -104,10 +142,10 @@ class VisualIclTests(unittest.TestCase):
                     'ground_truth': truth, 'expected_bias': prior, 'prior_answer': prior,
                     'source_split': split}
 
-        rows = [row(f'counterfactual-three-{index:02}', 3, 2) for index in range(40)]
-        rows.extend(row(f'counterfactual-five-{index:02}', 5, 4) for index in range(40))
-        original = [row(f'original-{index:02}', 2 if index < 20 else 4, None, 'original')
-                    for index in range(40)]
+        rows = [row(f'counterfactual-three-{index:02}', 3, 2) for index in range(per_label)]
+        rows.extend(row(f'counterfactual-five-{index:02}', 5, 4) for index in range(per_label))
+        original = [row(f'original-{index:02}', 2 if index < original_count // 2 else 4, None, 'original')
+                    for index in range(original_count)]
         manifest = {
             'phase': 'visual-icl', 'seed': 42, 'dataset_revision': DATASET_REVISION,
             'model': {'id': 'Qwen/Qwen3-VL-32B-Instruct', 'revision': 'a' * 40},
@@ -137,6 +175,7 @@ class VisualIclTests(unittest.TestCase):
             manifest = self.prepare(Path(tmp))
             contexts = manifest['visual_icl_contexts']
             self.assertEqual(len(contexts), CONTEXT_COUNT)
+            self.assertEqual(manifest['visual_icl_registration']['expected_counterfactual_accuracy_gain'], 0.15)
             self.assertEqual(len(manifest['family_split']['animals']['same_domain_test_families']), MIN_FAMILIES)
             self.assertEqual(len({family for context in contexts for family in context['demo_families']}),
                              CONTEXT_COUNT * 4)
@@ -148,14 +187,15 @@ class VisualIclTests(unittest.TestCase):
     def test_cli_evaluates_contexts_with_answer_space_control_and_preserves_attempts(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
-            self.prepare(run_dir)
-            backend = FakeBackend()
-            code, result = self.run_cli(run_dir, backend)
+            with self.small_protocol():
+                self.prepare(run_dir, per_label=4, original_count=2)
+                backend = FakeBackend()
+                code, result = self.run_cli(run_dir, backend)
             self.assertEqual((code, result['status']), (0, 'PASS'))
             self.assertEqual(result['scientific_status'], 'NEEDS_EVIDENCE')
-            self.assertEqual(len(backend.tasks), 760)
+            self.assertEqual(len(backend.tasks), 22)
             one = [task for task in backend.tasks if task['family'] == 'counterfactual-three-00']
-            self.assertEqual(len(one), 10)
+            self.assertEqual(len(one), 4)
             self.assertEqual({task['arm'] for task in one},
                              {'zero_shot', 'answer_space_control', 'visual_icl', 'shuffled_labels'})
             self.assertTrue(all('sigma' not in task and 'prior_image' not in task for task in one))
@@ -169,49 +209,61 @@ class VisualIclTests(unittest.TestCase):
             self.assertEqual([d['image'] for d in aligned], [d['image'] for d in shuffled])
             self.assertEqual(sorted(d['answer'] for d in aligned), sorted(d['answer'] for d in shuffled))
             self.assertTrue(all(a['answer'] != b['answer'] for a, b in zip(aligned, shuffled)))
-            self.assertEqual(len(list(run_dir.glob('logs/**/intent.json'))), 760)
-            code, result = self.run_cli(run_dir, backend)
+            self.assertEqual(len(list(run_dir.glob('logs/**/intent.json'))), 22)
+            with self.small_protocol():
+                code, result = self.run_cli(run_dir, backend)
             self.assertEqual((code, result['status']), (0, 'PASS'))
-            self.assertEqual(len(backend.tasks), 760)
+            self.assertEqual(len(backend.tasks), 22)
 
     def test_dry_run_rejects_demo_leakage_and_corrupt_images(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
-            manifest = self.prepare(run_dir)
-            backend = FakeBackend()
-            code, result = self.run_cli(run_dir, backend, '--dry-run')
+            with self.small_protocol():
+                manifest = self.prepare(run_dir, per_label=4, original_count=2)
+                backend = FakeBackend()
+                code, result = self.run_cli(run_dir, backend, '--dry-run')
             self.assertEqual((code, result['status']), (0, 'DRY_RUN'))
             manifest['visual_icl_contexts'][0]['demo_families'][0] = \
                 manifest['family_split']['animals']['same_domain_test_families'][0]
             self.save(run_dir, manifest)
-            _, result = self.run_cli(run_dir, backend, '--dry-run')
+            with self.small_protocol():
+                _, result = self.run_cli(run_dir, backend, '--dry-run')
             self.assertEqual(result['status'], 'INCONCLUSIVE')
-            register_visual_icl(manifest)
+            with self.small_protocol():
+                register_visual_icl(manifest)
             self.save(run_dir, manifest)
-            (run_dir / 'demo0.png').write_bytes(b'changed')
-            _, result = self.run_cli(run_dir, backend, '--dry-run')
+            selected_demo = manifest['visual_icl_contexts'][0]['demo_families'][0]
+            (run_dir / f'{selected_demo}.png').write_bytes(b'changed')
+            with self.small_protocol():
+                _, result = self.run_cli(run_dir, backend, '--dry-run')
             self.assertEqual(result['status'], 'INCONCLUSIVE')
             self.assertFalse(backend.tasks)
 
     def test_token_mismatch_cannot_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
-            self.prepare(run_dir)
-            code, result = self.run_cli(run_dir, FakeBackend(mismatch=True))
+            with self.small_protocol():
+                self.prepare(run_dir, per_label=4, original_count=2)
+                code, result = self.run_cli(run_dir, FakeBackend(mismatch=True))
             self.assertEqual((code, result['status']), (1, 'INCONCLUSIVE'))
             self.assertIn('token', result['reason'].lower())
 
     def test_backend_failure_can_resume_without_preparing_a_new_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
-            self.prepare(run_dir)
-            backend = FakeBackend(fail_first=True)
-            code, result = self.run_cli(run_dir, backend)
+            with self.small_protocol():
+                self.prepare(run_dir, per_label=4, original_count=2)
+                backend = FakeBackend(fail_first=True)
+                code, result = self.run_cli(run_dir, backend)
             self.assertEqual((code, result['status']), (1, 'INCONCLUSIVE'))
             self.assertEqual(len(backend.tasks), 1)
             self.assertEqual(len(list(run_dir.glob('logs/**/intent.json'))), 1)
             self.assertEqual(result['failures'][0]['error'], 'model initialization failed')
             resumed = FakeBackend()
-            code, result = self.run_cli(run_dir, resumed)
+            with self.small_protocol():
+                code, result = self.run_cli(run_dir, resumed)
             self.assertEqual((code, result['status']), (0, 'PASS'))
-            self.assertEqual(len(resumed.tasks), 760)
+            self.assertEqual(len(resumed.tasks), 22)
+            first_task = run_dir / 'logs' / 'visual_icl' / 'visual-icl-0000-zero_shot'
+            self.assertTrue((first_task / '1' / 'result.json').is_file())
+            self.assertTrue((first_task / '2' / 'result.json').is_file())

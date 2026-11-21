@@ -68,6 +68,8 @@ def main(argv=None):
             'budget_usd': args.budget_usd,
             'budget_mode': 'unlimited' if args.unlimited_budget else 'capped',
         }
+        if args.prepare_visual_icl:
+            config['runtime']['min_gpu_memory_gb'] = 80
         run_dir = prepare_vlmbias_run(
             args.root, ICL_PHASE if args.prepare_visual_icl else 'development', domains, config,
             max_per_domain=max_per_domain, calibration_max_per_domain=originals)
