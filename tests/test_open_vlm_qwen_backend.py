@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
-from open_vlm.qwen_backend import QwenBackend  # noqa: E402
+from open_vlm.qwen_backend import QwenBackend, VISUAL_ICL_MODEL_ID  # noqa: E402
 
 
 class FakeQwenModel:
@@ -165,6 +165,34 @@ class FakeHFQwenModel:
 
 
 class OpenVlmQwenBackendTests(unittest.TestCase):
+    def test_visual_icl_requires_an_80_gb_cuda_device_before_loading_weights(self):
+        class FakeCuda:
+            @staticmethod
+            def is_available():
+                return True
+
+            @staticmethod
+            def device_count():
+                return 1
+
+            @staticmethod
+            def get_device_properties(_index):
+                return type('Properties', (), {'total_memory': 48 * 1024**3})()
+
+        torch = ModuleType('torch')
+        torch.bfloat16 = object()
+        torch.cuda = FakeCuda()
+        transformers = ModuleType('transformers')
+        transformers.AutoProcessor = object()
+        transformers.Qwen3VLForConditionalGeneration = object()
+        with patch.dict(sys.modules, {'torch': torch, 'transformers': transformers}):
+            backend = QwenBackend(manifest={
+                'model': {'id': VISUAL_ICL_MODEL_ID, 'revision': 'a' * 40},
+                'runtime': {'device': 'cuda', 'min_gpu_memory_gb': 80},
+            })
+            with self.assertRaisesRegex(RuntimeError, '80 GB'):
+                backend._ensure_loaded()
+
     def backend(self):
         return QwenBackend(
             model=FakeQwenModel(),

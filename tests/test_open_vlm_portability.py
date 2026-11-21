@@ -243,6 +243,20 @@ class OpenVlmPortabilityTests(unittest.TestCase):
         self.assertIsNone(config['budget_usd'])
         self.assertEqual(config['model']['revision'], MODEL_COMMIT)
 
+    def test_visual_icl_preparation_registers_80_gb_gpu_requirement_and_larger_sample(self):
+        with patch('open_vlm_pilot.prepare_vlmbias_run', return_value=Path('prepared')) as prepare:
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = open_vlm_main([
+                    '--prepare-visual-icl', '--root', 'runs', '--model-revision', MODEL_COMMIT,
+                    '--dataset-license', 'verified', '--model-license', 'verified',
+                    '--gpu-cost-per-hour', '1.50', '--unlimited-budget',
+                ])
+        self.assertEqual(result, 0)
+        self.assertEqual(prepare.call_args.args[1], 'visual-icl')
+        self.assertEqual(prepare.call_args.kwargs['max_per_domain'], 80)
+        self.assertEqual(prepare.call_args.kwargs['calibration_max_per_domain'], 40)
+        self.assertEqual(prepare.call_args.args[3]['runtime']['min_gpu_memory_gb'], 80)
+
     def test_prepared_manifest_fingerprint_matches_current_execution_source(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

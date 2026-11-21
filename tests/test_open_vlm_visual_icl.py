@@ -15,21 +15,25 @@ import open_vlm_pilot
 from open_vlm.schema import DATASET_REVISION, execution_source_fingerprint
 from open_vlm.dataset import load_visual_icl_rows, visual_icl_animal_family
 from open_vlm.qwen_backend import QwenBackend
+from open_vlm.visual_icl import CONTEXT_COUNT, MIN_FAMILIES, register_visual_icl
 
 
 class FakeBackend:
-    def __init__(self, mismatch=False):
+    def __init__(self, mismatch=False, fail_first=False):
         self.tasks = []
         self.mismatch = mismatch
+        self.fail_first = fail_first
 
     def run(self, task, method):
         self.tasks.append(task)
+        if self.fail_first and len(self.tasks) == 1:
+            raise RuntimeError('model initialization failed')
         demos = task['demonstrations']
-        correct = not demos or all(d['answer'] == '3' for d in demos[:2])
         truth = task['ground_truth']
-        prediction = truth if truth % 2 == 0 or (demos and correct) else task['prior_answer']
+        prediction = truth if (task['evaluation_split'] == 'original'
+                               or task['arm'] == 'visual_icl') else task['prior_answer']
         return {'prediction': str(prediction), 'input_token_count': 100 + len(demos)
-                + int(self.mismatch and bool(demos) and not correct),
+                + int(self.mismatch and task['arm'] == 'shuffled_labels'),
                 'forward_passes': 1, 'image_encodes': 1 + len(demos), 'raw': str(prediction)}
 
 
@@ -100,20 +104,20 @@ class VisualIclTests(unittest.TestCase):
                     'ground_truth': truth, 'expected_bias': prior, 'prior_answer': prior,
                     'source_split': split}
 
-        demos = [row(f'demo{i}', 3 if i < 2 else 5, 2 if i < 2 else 4) for i in range(4)]
-        test = [row(f'test{i}', 3, 2) for i in range(20)]
-        original = [row(f'original{i}', 2 if i < 10 else 4, None, 'original') for i in range(20)]
+        rows = [row(f'counterfactual-three-{index:02}', 3, 2) for index in range(40)]
+        rows.extend(row(f'counterfactual-five-{index:02}', 5, 4) for index in range(40))
+        original = [row(f'original-{index:02}', 2 if index < 20 else 4, None, 'original')
+                    for index in range(40)]
         manifest = {
             'phase': 'visual-icl', 'seed': 42, 'dataset_revision': DATASET_REVISION,
             'model': {'id': 'Qwen/Qwen3-VL-32B-Instruct', 'revision': 'a' * 40},
             'execution_sources': execution_source_fingerprint(),
             'license_attestations': {'dataset': 'verified', 'model': 'verified'},
-            'runtime': {'device': 'cpu'},
-            'rows': demos + test, 'step0_rows': original,
-            'family_split': {'animals': {'dev_families': [r['family'] for r in demos],
-                                         'same_domain_test_families': [r['family'] for r in test]}},
+            'runtime': {'device': 'cpu', 'min_gpu_memory_gb': 80},
+            'rows': rows, 'step0_rows': original,
+            'family_split': {'animals': {'dev_families': [], 'same_domain_test_families': []}},
         }
-        manifest['visual_icl_demo_families'] = ['demo1', 'demo0', 'demo2', 'demo3']
+        register_visual_icl(manifest)
         self.save(run_dir, manifest)
         return manifest
 
@@ -128,7 +132,20 @@ class VisualIclTests(unittest.TestCase):
                 code = open_vlm_pilot.main([phase, '--run-dir', str(run_dir)])
         return code, json.loads(output.getvalue())
 
-    def test_cli_evaluates_matched_arms_and_preserves_attempts(self):
+    def test_contexts_are_balanced_ordered_and_disjoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self.prepare(Path(tmp))
+            contexts = manifest['visual_icl_contexts']
+            self.assertEqual(len(contexts), CONTEXT_COUNT)
+            self.assertEqual(len(manifest['family_split']['animals']['same_domain_test_families']), MIN_FAMILIES)
+            self.assertEqual(len({family for context in contexts for family in context['demo_families']}),
+                             CONTEXT_COUNT * 4)
+            orders = {tuple(context['answer_labels']) for context in contexts}
+            self.assertGreater(len(orders), 1)
+            for context in contexts:
+                self.assertEqual(sorted(context['answer_labels']), [3, 3, 5, 5])
+
+    def test_cli_evaluates_contexts_with_answer_space_control_and_preserves_attempts(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
             self.prepare(run_dir)
@@ -136,19 +153,26 @@ class VisualIclTests(unittest.TestCase):
             code, result = self.run_cli(run_dir, backend)
             self.assertEqual((code, result['status']), (0, 'PASS'))
             self.assertEqual(result['scientific_status'], 'NEEDS_EVIDENCE')
-            self.assertEqual(len(backend.tasks), 120)
-            one = [t for t in backend.tasks if t['family'] == 'test0']
-            self.assertEqual(len(one), 3)
+            self.assertEqual(len(backend.tasks), 760)
+            one = [task for task in backend.tasks if task['family'] == 'counterfactual-three-00']
+            self.assertEqual(len(one), 10)
+            self.assertEqual({task['arm'] for task in one},
+                             {'zero_shot', 'answer_space_control', 'visual_icl', 'shuffled_labels'})
             self.assertTrue(all('sigma' not in task and 'prior_image' not in task for task in one))
-            zero, aligned, shuffled = [t['demonstrations'] for t in one]
-            self.assertEqual(zero, [])
+            zero = [task for task in one if task['arm'] == 'zero_shot']
+            answer_space = [task for task in one if task['arm'] == 'answer_space_control']
+            self.assertEqual(len(zero), 1)
+            self.assertEqual(len(answer_space), 1)
+            self.assertIn('either 3 or 5', answer_space[0]['prompt'])
+            aligned = next(task['demonstrations'] for task in one if task['arm'] == 'visual_icl')
+            shuffled = next(task['demonstrations'] for task in one if task['arm'] == 'shuffled_labels')
             self.assertEqual([d['image'] for d in aligned], [d['image'] for d in shuffled])
             self.assertEqual(sorted(d['answer'] for d in aligned), sorted(d['answer'] for d in shuffled))
             self.assertTrue(all(a['answer'] != b['answer'] for a, b in zip(aligned, shuffled)))
-            self.assertEqual(len(list(run_dir.glob('logs/**/intent.json'))), 120)
+            self.assertEqual(len(list(run_dir.glob('logs/**/intent.json'))), 760)
             code, result = self.run_cli(run_dir, backend)
-            self.assertEqual((code, result['status']), (1, 'INCONCLUSIVE'))
-            self.assertEqual(len(backend.tasks), 120)
+            self.assertEqual((code, result['status']), (0, 'PASS'))
+            self.assertEqual(len(backend.tasks), 760)
 
     def test_dry_run_rejects_demo_leakage_and_corrupt_images(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -157,11 +181,12 @@ class VisualIclTests(unittest.TestCase):
             backend = FakeBackend()
             code, result = self.run_cli(run_dir, backend, '--dry-run')
             self.assertEqual((code, result['status']), (0, 'DRY_RUN'))
-            manifest['visual_icl_demo_families'][0] = 'test0'
+            manifest['visual_icl_contexts'][0]['demo_families'][0] = \
+                manifest['family_split']['animals']['same_domain_test_families'][0]
             self.save(run_dir, manifest)
             _, result = self.run_cli(run_dir, backend, '--dry-run')
             self.assertEqual(result['status'], 'INCONCLUSIVE')
-            manifest['visual_icl_demo_families'][0] = 'demo1'
+            register_visual_icl(manifest)
             self.save(run_dir, manifest)
             (run_dir / 'demo0.png').write_bytes(b'changed')
             _, result = self.run_cli(run_dir, backend, '--dry-run')
@@ -176,18 +201,17 @@ class VisualIclTests(unittest.TestCase):
             self.assertEqual((code, result['status']), (1, 'INCONCLUSIVE'))
             self.assertIn('token', result['reason'].lower())
 
-    def test_backend_failure_stops_new_inference_and_retains_intent(self):
-        class FailingBackend(FakeBackend):
-            def run(self, task, method):
-                self.tasks.append(task)
-                raise RuntimeError('GPU unavailable')
-
+    def test_backend_failure_can_resume_without_preparing_a_new_run(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
             self.prepare(run_dir)
-            backend = FailingBackend()
+            backend = FakeBackend(fail_first=True)
             code, result = self.run_cli(run_dir, backend)
             self.assertEqual((code, result['status']), (1, 'INCONCLUSIVE'))
             self.assertEqual(len(backend.tasks), 1)
             self.assertEqual(len(list(run_dir.glob('logs/**/intent.json'))), 1)
-            self.assertEqual(result['failures'][0]['error'], 'GPU unavailable')
+            self.assertEqual(result['failures'][0]['error'], 'model initialization failed')
+            resumed = FakeBackend()
+            code, result = self.run_cli(run_dir, resumed)
+            self.assertEqual((code, result['status']), (0, 'PASS'))
+            self.assertEqual(len(resumed.tasks), 760)
